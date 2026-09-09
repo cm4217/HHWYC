@@ -1,0 +1,24 @@
+{
+  "name": "化合物理化性质预测平台",
+  "short_name": "ChemProp",
+  "description": "面向原料药与中间体研发的化合物理化性质预测工具（PubChem + RDKit WASM 全离线）",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f4f6fa",
+  "theme_color": "#2563eb",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "assets/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "assets/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

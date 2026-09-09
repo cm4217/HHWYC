@@ -1,0 +1,28 @@
+# 依赖（E2E 测试 / 本地 OCR 服务，非网站运行必需）
+node_modules/
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 本地调试与审计产物
+_audit_shots/
+_audit_out*.txt
+*.log
+*.tmp
+
+# 本地部署辅助脚本（已单独保留，可忽略）
+pack.py
+
+# 系统/编辑器
+.DS_Store
+.vscode/
+.idea/
+.git/
+.workbuddy/
+
+# 环境与虚拟环境
+.env
+venv/
+.venv/

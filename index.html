@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>化合物理化性质预测平台 · ChemProp Predictor</title>
+  <meta name="description" content="基于 PubChem、RDKit (WASM) 与 SwissADME 规则的化合物理化性质与 ADME 预测工具，适用于原料药及中间体研发。" />
+  <meta name="theme-color" content="#2563eb" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="assets/icon-192.png" type="image/png" />
+  <link rel="stylesheet" href="assets/styles.css" />
+  <!-- 主题引导：在 body 渲染前同步设置浅色/暗色与 color-scheme，避免首屏闪烁（FOUC） -->
+  <script>
+    (function () {
+      try {
+        var m = localStorage.getItem('chemprop_theme');
+        if (!m || (m !== 'light' && m !== 'dark' && m !== 'auto')) {
+          var legacy = localStorage.getItem('chemprop_dark');
+          if (legacy === '1') m = 'dark';
+          else if (legacy === '0') m = 'light';
+          else m = 'auto';
+        }
+        var dark = (m === 'dark') || (m === 'auto' && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+        if (dark) document.documentElement.classList.add('dark');
+        document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+      } catch (e) {}
+    })();
+  </script>
+  <!-- 本地 RDKit WASM 引擎（离线可用；缺失时自动回退 CDN） -->
+  <script defer src="assets/rdkit/RDKit_minimal.js"></script>
+  <script>
+    // 停用 Service Worker：此前 SW 会缓存旧版本（chemprop-v20250829y），当云端 sandbox 休眠、
+    // 网络请求失败时回退到与当前 ?v=20260907i 脚本不匹配的旧缓存，导致页面"一直显示错误"。
+    // 改为：加载时注销所有已注册的 SW 并清空缓存，之后每次都从服务器取最新资源（本站点需实时拉取 RDKit/OCL，离线缓存弊大于利）。
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.getRegistrations().then(function (regs) {
+          regs.forEach(function (r) { try { r.unregister(); } catch (e) {} });
+        }).catch(function () {});
+        if (window.caches) {
+          caches.keys().then(function (keys) { keys.forEach(function (k) { try { caches.delete(k); } catch (e) {} }); }).catch(function () {});
+        }
+      });
+    }
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a href="index.html" class="brand" title="回到主页">
+        <div class="logo">⚗️</div>
+        <span class="brand-name" data-i18n="brand">化合物理化性质预测平台</span>
+      </a>
+      <div class="header-actions">
+        <span id="engineStatus" class="badge badge-neutral">引擎：未加载</span>
+        <button id="statsBtn" class="btn btn-ghost" type="button" title="查询历史统计" data-i18n="statsBtn">📊 统计</button>
+        <button id="kbBtn" class="btn btn-ghost" type="button" title="化学知识库：种子库 / 缓存 / 源成功率 / 自进化失败队列" data-i18n="kbBtn">🧠 知识库</button>
+        <button id="darkToggle" class="btn btn-ghost" type="button" title="主题：自动跟随系统 / 浅色 / 暗色（点击切换）">🌗 自动</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- 输入区 -->
+    <section class="card input-card">
+      <div class="input-tabs">
+        <div class="input-tabs-header">
+          <div class="input-tab-title" data-i18n="inputCardTitle">化合物输入</div>
+          <div class="input-tab-btns" role="tablist">
+            <button class="input-tab-btn active" type="button" data-tab="text" role="tab" aria-selected="true" data-i18n="tabTextInput">文本输入</button>
+            <button class="input-tab-btn" type="button" data-tab="image" role="tab" aria-selected="false" data-i18n="tabImageInput">图片识别</button>
+          </div>
+        </div>
+
+        <!-- 文本输入 -->
+        <div class="input-tab-panel active" data-panel="text">
+          <div class="input-row">
+            <div class="field">
+              <label for="inputType" data-i18n="inputType">输入类型</label>
+              <select id="inputType">
+                <option value="auto" data-i18n="inputTypeAuto">自动识别</option>
+                <option value="smiles">SMILES</option>
+                <option value="name" data-i18n="inputTypeName">化合物名称</option>
+                <option value="cas" data-i18n="inputTypeCas">CAS 号</option>
+                <option value="inchi" data-i18n="inputTypeInchi">InChI</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="role" data-i18n="role">化合物角色</label>
+              <select id="role">
+                <option value="intermediate" data-i18n="roleIntermediate">中间体</option>
+                <option value="api" data-i18n="roleApi">原料药 (API)</option>
+                <option value="impurity" data-i18n="roleImpurity">杂质</option>
+                <option value="reagent" data-i18n="roleReagent">试剂</option>
+                <option value="unknown" data-i18n="roleUnknown">未指定</option>
+              </select>
+              <div id="roleHint" class="role-hint"></div>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="compoundInput" data-i18n="compoundInput">化合物标识（支持 SMILES / 名称 / CAS / InChI）</label>
+            <div class="suggest-wrap">
+              <textarea id="compoundInput" rows="1" data-i18n-ph="compoundInputPh" placeholder="例如：CC(=O)Oc1ccccc1C(=O)O（阿司匹林）；SMILES / 名称 / CAS / InChI 均可，输入自动联想"></textarea>
+              <div id="suggestBox" class="suggest-box hidden"></div>
+            </div>
+            <div class="suggest-hint" id="suggestHint" data-i18n="suggestHint">💡 输入时自动联想常用<b>简称</b> / <b>通用名</b> / <b>官方名</b>：↓↑ 选择，Enter 或 Tab 填入，Esc 关闭</div>
+          </div>
+
+          <div class="chips" id="exampleChips"></div>
+        </div>
+
+        <!-- 图片识别 -->
+        <div class="input-tab-panel" data-panel="image">
+          <input type="file" id="mainOcrFile" accept="image/*" capture="environment" hidden />
+          <div class="image-drop-zone" id="imageDropZone">
+            <div class="image-drop-icon" aria-hidden="true">🖼</div>
+            <div class="image-drop-text" data-i18n="imageDropText">点击 / 拖拽 / Ctrl+V 粘贴</div>
+            <div class="image-drop-sub" data-i18n="imageDropSub">结构式图片 → SMILES · PNG/JPG</div>
+          </div>
+          <div id="imagePreview" class="image-preview hidden"></div>
+
+          <!-- 本地 OCR 服务设置（解决在线 Space 不稳定问题） -->
+          <div class="ocr-server-row">
+            <div class="ocr-server-header">
+              <label for="localOcrUrl" data-i18n="localOcrUrlLabel">本地 OCR 服务地址（推荐）</label>
+              <button id="localOcrInstallBtn" class="btn btn-sm btn-primary" type="button" data-i18n="localOcrInstall">🚀 一键安装并启动本地服务</button>
+            </div>
+            <div class="ocr-server-inputs">
+              <input type="url" id="localOcrUrl" class="local-ocr-url" value="http://localhost:8765" placeholder="http://localhost:8765" />
+              <button id="localOcrTestBtn" class="btn btn-sm btn-ghost" type="button" data-i18n="localOcrTest">检测</button>
+            </div>
+            <div class="row-note" data-i18n="localOcrHint">💡 在线 OCR 服务目前不稳定。使用本机 OCR 服务可离线识别、数据不出内网，且成功率最高。</div>
+            <div id="localOcrGuide" class="ocr-install-guide hidden">
+              <div class="guide-title">本地服务安装向导</div>
+              <ol class="guide-steps">
+                <li>点「下载安装包」，浏览器会生成本地 zip 包（含 setup_ocr_server.bat / .ps1 / local_ocr_server.py）。</li>
+                <li>解压 zip，进入解压出的文件夹，双击 <code>setup_ocr_server.bat</code>。</li>
+                <li>脚本会自动检测 Python → 创建虚拟环境 → 安装依赖 → 启动服务（首次约 5-15 分钟，需联网下载模型）。</li>
+                <li>看到「本地 OCR 服务已启动」后，回到本页点击「检测」，再上传图片识别。</li>
+              </ol>
+              <div class="guide-actions">
+                <button id="localOcrDownloadBundle" class="btn btn-sm btn-secondary" type="button">📥 下载安装包</button>
+                <button id="localOcrCopyCmd" class="btn btn-sm btn-ghost" type="button">📋 复制手动命令</button>
+              </div>
+              <div class="row-note" style="margin-top:8px">若脚本无法运行，可手动执行：<code id="localOcrManualCmd">python -m venv venv_ocr &amp;&amp; venv_ocr\Scripts\activate &amp;&amp; pip install molscribe decimer molnextr pillow rdkit &amp;&amp; python local_ocr_server.py</code></div>
+              <div class="row-note" style="margin-top:6px">常见问题：① 未安装 Python → 从 python.org 下载 3.10+ 并勾选「Add to PATH」；② 双击 .bat 闪退 → 在文件夹空白处 Shift+右键 →「在此处打开 PowerShell 窗口」→ 运行 <code>powershell -ExecutionPolicy Bypass -File setup_ocr_server.ps1</code>。</div>
+            </div>
+          </div>
+
+          <div id="mainOcrStatus" class="image-ocr-status"></div>
+          <button id="imageOcrRunBtn" class="btn btn-primary image-ocr-run-btn" type="button" disabled data-i18n="imageOcrRunBtn">AI 识别结构</button>
+          <button id="onlineOcrBtn" class="btn btn-ghost image-ocr-online-btn" type="button" style="width:100%;margin-top:8px">🌐 在线识别（外部工具）</button>
+        </div>
+
+      <div class="action-row" style="margin-top:14px">
+        <button id="predictBtn" class="btn btn-primary" type="button" data-i18n="predictBtn">🔍 预测性质</button>
+        <button id="batchBtn" class="btn btn-secondary" type="button" data-i18n="batchBtn">📊 批量模式</button>
+        <button id="clearBtn" class="btn btn-ghost" type="button" data-i18n="clearBtn">清空</button>
+        <span id="statusMsg" class="status-msg"></span>
+      </div>
+    </section>
+
+    <!-- 查询历史（默认折叠，加 "📂 展开" 按钮） -->
+    <section id="historySection" class="card history-card collapsed-history">
+      <div class="card-title-row">
+        <div class="card-title" style="margin:0;border:none;padding:0"><span data-i18n="historyTitle">🕘 查询历史</span> <span class="row-note" id="historyCount" style="margin:0"></span></div>
+        <div class="history-actions">
+          <button id="historyExpandBtn" class="btn btn-sm btn-ghost" type="button" title="展开查询历史" data-i18n="historyExpand">📂 展开历史</button>
+          <button id="historyExportBtn" class="btn btn-sm btn-ghost" type="button" title="导出查询历史为 Excel" data-i18n="historyExport">⬇ 导出</button>
+          <button id="historyClearBtn" class="btn btn-sm btn-ghost" type="button" data-i18n="historyClear">清空</button>
+          <button id="historyToggleBtn" class="btn btn-sm btn-ghost" type="button" data-i18n="historyToggle">收起</button>
+        </div>
+      </div>
+      <div id="historyList" class="history-list"></div>
+      <div id="historyEmpty" class="row-note" style="margin-top:10px" data-i18n="historyEmpty">暂无查询记录。每次预测完成后，这里会按时间倒序保存最近查询，点击可一键重现（刷新页面也不会丢）。</div>
+    </section>
+
+    <!-- 单条结果 -->
+    <section id="resultSection" class="result-section hidden">
+      <!-- 未匹配提示（自动解析失败时展示外部库搜索入口） -->
+      <div id="notFoundPanel" class="card not-found hidden"></div>
+
+      <div class="result-layout">
+        <!-- 结果区目录引导：桌面端靠右栏，平板/手机端置顶横向滚动 -->
+        <aside id="resultToc" class="result-toc hidden" aria-label="结果目录">
+          <div class="toc-card" id="tocCard">
+            <div class="toc-head">
+              <span class="toc-head-icon" aria-hidden="true">📑</span>
+              <span class="toc-title" data-i18n="tocTitle">目录</span>
+              <button class="toc-toggle" id="tocToggle" type="button" aria-label="收起目录" title="收起 / 展开目录">▼</button>
+              <button class="toc-close" id="tocClose" type="button" aria-label="关闭目录" title="关闭">✕</button>
+            </div>
+            <nav class="toc-nav" id="tocNav" aria-label="结果区目录"></nav>
+            <div class="toc-foot">
+              <button id="tocScrollTopBtn" class="toc-scroll-top" type="button" title="回到顶部" aria-label="回到顶部">
+                <svg class="toc-scroll-top-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 20V4M5 11l7-7 7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                </svg>
+                <span>回到顶部</span>
+              </button>
+            </div>
+          </div>
+        </aside>
+
+        <div class="result-main">
+          <!-- 结果概览 hero -->
+          <div id="resultHero" class="result-hero"></div>
+
+      <div class="result-grid">
+        <!-- 结构 + 身份 -->
+        <div class="card identity-card" id="identity-card">
+          <div class="card-title" data-i18n="ctStruct">结构式与身份信息</div>
+          <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>这里确认"查的是哪个化合物"。<b>名称 / CAS 登记号</b>是化合物的官方"身份证号"，<b>分子式</b>给出元素组成，<b>SMILES / InChI / InChIKey</b>是用文本表示结构——三者指向同一个结构，若 CAS 与 SMILES 对不上，以结构为准。</div>
+          <div class="structure-wrap">
+            <div id="structureImg" class="structure-img"></div>
+          </div>
+          <table class="identity-table" id="identityTable"></table>
+          <div id="reactiveNotes" class="reactive-notes"></div>
+
+          <div class="sub-title" style="margin-top:14px" data-i18n="subIdentityLinks">化合物身份识别（多数据库搜索）</div>
+          <div class="row-note">以下为各专业数据库的化合物身份 / 生物活性 / 药物信息 / 专利 / 文献检索入口，按名称或 InChIKey 跨库核对身份最可靠。</div>
+          <div class="action-row ext-row">
+            <button id="chemspiderIdBtn" class="btn btn-ghost" type="button">🔗 SpectraBase</button>
+            <button id="chemblBtn" class="btn btn-ghost" type="button">🔗 ChEMBL（生物活性）</button>
+            <button id="drugbankBtn" class="btn btn-ghost" type="button">🔗 DrugBank（药物）</button>
+            <button id="drugcentralBtn" class="btn btn-ghost" type="button">🔗 DrugCentral（适应症）</button>
+            <button id="zincBtn" class="btn btn-ghost" type="button">🔗 ZINC15（可购买性）</button>
+            <button id="chebiBtn" class="btn btn-ghost" type="button">🔗 ChEBI（生物语境）</button>
+            <button id="wikiBtn" class="btn btn-ghost" type="button">🔗 Wikipedia</button>
+            <button id="patentIdBtn" class="btn btn-ghost" type="button">🔗 Google Patents</button>
+            <button id="scholarIdBtn" class="btn btn-ghost" type="button">🔗 Google Scholar</button>
+          </div>
+        </div>
+
+        <!-- 性质卡片 -->
+        <div class="card props-card" id="props-card">
+          <div class="card-title" data-i18n="ctProps">理化性质（预测 / 计算）</div>
+          <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span><b>MW</b>（分子量）影响投料摩尔数计算；<b>logP</b>（脂水分配系数）越大越亲脂，利于透膜但水溶性差；<b>logD (pH 7.4)</b> = 生理 pH 下的"有效"脂水分配，比 logP 更贴近真实分配行为；<b>TPSA</b>（极性表面积）越大极性越强、越难透过生物膜；<b>HBD / HBA</b>（氢键供/受体）过多不利口服吸收；<b>可旋转键 / sp³ 比例 / 立体中心</b>反映分子柔性、手性复杂度与代谢稳定性；<b>pKa</b> 决定化合物在不同 pH 下的电离与电荷状态，直接关联成盐、溶解度与跨膜——平台给出官能团经验估算值，并据此推算 logD、净电荷与等电点 pI。</div>
+          <div class="prop-grid" id="propGrid"></div>
+        </div>
+      </div>
+
+      <!-- 可信度与模型质量（前置，新增） -->
+      <section class="card" id="adv-confidence-card">
+        <div class="card-title"><span data-i18n="ctAdvConf">可信度与模型质量评分</span> <span class="badge badge-src-rd">计算</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>对每个关键预测（logS / pKa / BCS / ADME）给出<b>可信度等级（高/中/低）</b>与依据：模型交叉印证程度、描述符完整性、分子量适用范围。写报告/做工艺决策时建议标注该等级。</div>
+        <div id="advConfidence"></div>
+      </section>
+
+      <!-- 种态分布（前置，新增） -->
+      <section class="card" id="adv-speciation-card">
+        <div class="card-title"><span data-i18n="ctAdvSpec">种态分布（pH–物种占比）</span> <span class="badge badge-src-rd">RDKit + H-H</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>按 Henderson-Hasselbalch 微态枚举法绘制<b>中性/阳离子/阴离子</b>三种物种分数随 pH 的变化，并叠加<b>净电荷–pH 曲线</b>。pI 处净电荷为零、中性分数最高——解释溶解度-pH 行为、成盐与等电点结晶的核心图。</div>
+        <div id="advSpeciation"></div>
+      </section>
+
+      <!-- 盐型 / 互变异构提示 -->
+      <section class="card form-card" id="form-card">
+        <div class="card-title"><span data-i18n="ctForm">盐型 / 互变异构提示</span> <span class="badge badge-src-rd">RDKit 子结构</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>本模块对输入结构的<b>成盐 / 盐型</b>与<b>互变异构</b>风险做提示：<b>盐型</b>会改变表观分子量、logP、溶解度与 pKa，工艺研发中常需区分「盐」与「游离 API」；<b>互变异构</b>影响 pKa、logP、溶解度与 H 键模式，是晶型/盐型筛选与杂质谱分析的关键。提示为经验粗筛，非完整枚举。</div>
+        <div id="formPanel"></div>
+      </section>
+
+      <!-- 水溶解度预测 -->
+      <section class="card solubility-card" id="solubility-card">
+        <div class="card-title"><span data-i18n="ctSol">水溶解度预测（QSAR 模型）</span><span class="badge badge-src-rd">RDKit + QSAR</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span><b>logS</b> 是溶解度对数（mol/L），<b>数值越大越易溶</b>（0以上高溶、−2~0易溶、−4~−2可溶、−6~−4中等可溶、−6以下难溶）。<b>mg/mL</b> 是换算后的实用浓度（≈ g/L）。<b>ESOL / Ali</b> 是两种常见 QSAR 模型，结果接近则可信度高；两者有偏差属正常，可参考<b>综合均值</b>。API 水溶性差常是制剂难点，可结合下方 pH 表看。</div>
+        <div id="solubilityPanel"></div>
+        <div id="phPanel" style="margin-top:16px"></div>
+      </section>
+
+      <!-- 热力学与几何/键参数 -->
+      <section class="card thermo-card" id="thermo-card">
+        <div class="card-title"><span data-i18n="ctThermo">热力学与几何 / 键参数</span> <span class="badge badge-src-rd">SolProp_ML + RDKit</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>本模块给出两类结构-性质参数：①<b>溶剂化热力学</b>（参考 SolProp_ML 框架，由 logS 反推溶解自由能 ΔG_solv，并估算焓 ΔH_solv、熵 ΔS_solv，以及 Abraham 溶剂化参数 E/S/A/B/L/V 与分配系数 logK / logK_aq）——用于判断分子进入水相 / 有机相的倾向；②<b>键长 / 键能 / 键角</b>（基于 RDKit 原子坐标与共价半径、平均 BDE 表估算），帮助快速评估骨架强度与局部几何。所有数值均为前端经验估算，非实验值。</div>
+        <div id="thermoPanel"></div>
+        <div id="geometryPanel"></div>
+      </section>
+
+      <!-- 3D 构象交互查看 -->
+      <section class="card conformer-card" id="conformer-card">
+        <div class="card-title"><span data-i18n="ctConf">3D 构象交互查看</span> <span class="badge badge-src-rd">RDKit / PubChem / Cactus</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>优先并行获取 <b>PubChem 3D 构象记录</b> 与 <b>NCI/CADD Cactus 3D</b> 的真实三维坐标；未匹配真实 3D 时，依次回退到 <b>PubChem 2D SDF → 伪 3D 投影</b>、<b>RDKit 2D → 伪 3D 投影</b>。伪 3D 基于 2D 坐标加入深度扰动生成（非力场构象），仍可<b>拖拽旋转、滚轮缩放、切换氢原子显示</b>，用于直观感受分子空间排布。真实分子存在多种构象异构体，此处仅为一种近似。</div>
+        <div id="conformerPanel"></div>
+      </section>
+
+      <!-- 毒性 / 基因毒性结构警示 -->
+      <section class="card tox-card" id="tox-card">
+        <div class="card-title-row">
+          <div class="card-title" style="margin:0;border:none;padding:0"><span data-i18n="ctTox">毒性 / 基因毒性结构警示</span> <span class="badge badge-src-rd">RDKit 子结构</span></div>
+          <div class="history-actions">
+            <button id="toxSvgBtn" class="btn btn-sm btn-ghost" type="button" title="导出当前检出警示结构的高亮 SVG">⬇ 高亮SVG</button>
+            <button id="toxPdfBtn" class="btn btn-sm btn-ghost" type="button" title="在新标签页打开可打印的警示结构视图（PDF 另存）">⬇ 打印PDF</button>
+            <button id="impurityExportBtn" class="btn btn-sm btn-secondary" type="button" title="基于当前检出警示结构生成杂质评估表（Excel 双 Sheet）">⬇ 导出杂质评估表</button>
+          </div>
+        </div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>本模块对结构做<b>基因毒性（ICH M7 框架）、hERG 心脏毒性、皮肤致敏、CYP 代谢</b>四类警示结构的子结构筛查（覆盖亚硝胺、环氧化物、烷化卤/磺酸酯、肼、重氮、芳胺/硝基等）。顶部横幅汇总<b>检出类数与高风险数</b>；下方按类别列出命中结构及严重度。对<b>基因毒性杂质评估（ICH M7）</b>与工艺安全有提示意义，但仅为结构粗筛，不能替代正式毒理/致突变研究。</div>
+        <div id="toxPanel"></div>
+        <div id="impurityPanel" class="impurity-panel hidden"></div>
+      </section>
+
+      <!-- 谱图与固态表征 -->
+      <section class="card spectra-card" id="spectra-card">
+        <div class="card-title"><span data-i18n="ctSpectra">谱图与固态表征（四大谱图 / 晶型·DSC·TGA）</span><span class="badge badge-src-pub">文献·专利·公开数据库</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span><b>分子式 / 精确质量 / 标称质量 / 不饱和度 DBE</b> 用来核对元素组成与环/双键数；<b>预测分子离子 M⁺</b> 是 EI-MS 的母峰；<b>同位素峰型</b>中若 <b>M+2 显著增高</b>，提示含氯/溴等卤素。四大谱图（¹H/¹³C NMR、IR、MS）与原料药<b>晶型、DSC、TGA</b> 属实验数据，本页提供权威数据库/专利/文献查询入口，点击跳转查证。</div>
+        <div id="spectraComputed"></div>
+        <div id="spectraLinks"></div>
+      </section>
+
+      <!-- ADME / 类药性与雷达图 -->
+      <div class="result-grid">
+        <div class="card adme-card" id="adme-card">
+          <div class="card-title" data-i18n="ctAdme">ADME 与类药性规则（SwissADME 风格）</div>
+          <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>五套规则（<b>Lipinski / Veber / Egan / Muegge / Ghose</b>）从分子量、logP、TPSA、HBD/HBA、可旋转键等维度判断"是否容易做成口服药"——<b>违例越少越"类药"</b>。<b>生物利用度评分</b>估计口服吸收程度；<b>BBB</b> 判断能否透过血脑屏障（中枢药需要、外周药则要避免）；<b>GI 吸收</b>为胃肠道吸收水平；<b>合成可及性</b>越低越容易合成。<b>PAINS/Brenk 警示</b>提示可能干扰活性或毒性风险的结构片段。</div>
+          <div id="admePanel"></div>
+        </div>
+        <div class="card radar-card" id="radar-card">
+          <div class="card-title" data-i18n="ctRadar">类药性雷达图</div>
+          <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>六根轴分别对应 MW / logP / TPSA / HBD / HBA / 可旋转键的<b>归一化得分</b>（越靠近外圈=越接近理想类药区间），一眼看该化合物的"短板"在哪。</div>
+          <div id="radarChart" class="radar-wrap"></div>
+          <div id="radarLegend" class="radar-legend" data-i18n="radarLegend"></div>
+        </div>
+      </div>
+
+      <!-- 类药性进阶（先导优化 / 片段规则） -->
+      <section class="card medchem-card" id="medchem-card">
+        <div class="card-title"><span data-i18n="ctLead">类药性进阶（先导优化 / 片段规则）</span><span class="badge badge-src-rd">计算</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>在 Lipinski/Veber 等「口服成药性」规则之外，本模块给出<b>先导物优化</b>常用规则：GSK 4/400（MW≤400 且 logP≤4）、Pfizer 3/75（logP≤3 且 TPSA≥75）、Golden Triangle（logP 0–5 且 TPSA≤140）、Rule of Three（片段 Ro3）。用于判断一个苗头/先导是否落在「易优化」的化学空间。</div>
+        <div id="medchemPanel"></div>
+      </section>
+
+      <!-- ESOL 溶解度贡献分解（新增） -->
+      <section class="card" id="adv-esol-card">
+        <div class="card-title"><span data-i18n="ctAdvEsol">ESOL 溶解度贡献分解</span> <span class="badge badge-src-rd">计算</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>将 ESOL 综合 logS 拆为<b>截距 / ClogP / 分子量 / 柔性</b>四项贡献，标红最大负贡献项＝主要难溶驱动，指导「降 logP / 降 MW / 降柔性」改构方向。</div>
+        <div id="advEsol"></div>
+      </section>
+
+      <!-- ICH M7 杂质评估面板（新增） -->
+      <section class="card" id="adv-ichm7-card">
+        <div class="card-title"><span data-i18n="ctAdvM7">ICH M7 杂质评估面板</span> <span class="badge badge-src-rd">基于毒性筛查</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>承接「毒性」卡片的警示结构，按 <b>ICH M7 基因毒性杂质框架</b>归类，给出 Ames 试验建议、TTC 限度入口与杂质谱追踪表，与「导出杂质评估表」（QS-1/API 双 Sheet）衔接。</div>
+        <div id="advIchm7"></div>
+      </section>
+
+      <!-- 盐型 / 晶型预测 + BCS 策略（新增） -->
+      <section class="card" id="adv-salt-card">
+        <div class="card-title"><span data-i18n="ctAdvSalt">盐型 / 晶型预测 + BCS 策略</span> <span class="badge badge-src-rd">规则</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>基于 pKa 给出<b>候选盐型排序</b>（ΔpKa 适配性：强碱适用弱酸盐，弱碱需强酸盐），并联动 BCS 分类给出制剂策略。对成盐品种（如琥珀酸盐 API）选盐直接有用。</div>
+        <div id="advSalt"></div>
+      </section>
+
+      <!-- Hansen 溶解度参数（新增） -->
+      <section class="card" id="adv-hansen-card">
+        <div class="card-title"><span data-i18n="ctAdvHansen">Hansen 溶解度参数（三维）</span> <span class="badge badge-src-rd">相关性估计</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>给出 <b>δD/δP/δH</b> 三维溶解度参数与 Ro，并列出与常见溶剂的 Hansen 距离 Ra（升序＝越可能良溶），辅助<b>结晶良/反溶剂配对</b>与萃取体系设计。δ 值为相关性经验估计，但 Ra 排序具趋势参考价值。</div>
+        <div id="advHansen"></div>
+      </section>
+
+      <!-- 温度依赖溶解度 / 重结晶（新增） -->
+      <section class="card" id="adv-tempsol-card">
+        <div class="card-title"><span data-i18n="ctAdvTemp">温度依赖溶解度 / 重结晶相图</span> <span class="badge badge-src-rd">van't Hoff</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>基于 ΔH_solv 用 <b>van't Hoff 方程</b>外推不同温度下的固有溶解度，判断「热溶-冷却析晶」驱动力（ΔH>0 吸热溶解、升温显著增溶更适合冷却结晶；反之宜用反溶剂/蒸发析晶）。</div>
+        <div id="advTempSol"></div>
+      </section>
+
+      <!-- pH–表观溶解度分布图（新增） -->
+      <section class="card" id="adv-soldist-card">
+        <div class="card-title"><span data-i18n="ctAdvSol">pH–表观溶解度分布图</span> <span class="badge badge-src-rd">S₀/χ 模型</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>由<b>固有溶解度 S₀</b> 与<b>中性物种分数 χ_neutral</b> 推表观溶解度 S_app(pH)=S₀/χ_neutral，绘制 pH–logS 分布曲线。中性分数越低（强电离区）表观溶解度越高——直观解释「成盐 / 调 pH 增溶」机理，与「GSE pH–溶解度曲线」同源互补。</div>
+        <div id="advSolDist"></div>
+      </section>
+
+      <!-- 绿色化学与工艺安全评（新增） -->
+      <section class="card" id="adv-green-card">
+        <div class="card-title"><span data-i18n="ctAdvGreen">绿色化学与工艺安全评分</span> <span class="badge badge-src-rd">分子级代理</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>从<b>卤素 / 毒性警示 / 分子量 / 多环 / 高柔性</b>等维度做分子级绿色扣分，给出总体绿色评分。注意：未纳入具体路线（原子经济性、溶剂耗量、步骤数），高分≠路线绿色。</div>
+        <div id="advGreen"></div>
+      </section>
+
+      <!-- 辅料兼容性 / 制剂策略（新增） -->
+      <section class="card" id="adv-excipient-card">
+        <div class="card-title"><span data-i18n="ctAdvExc">辅料兼容性 / 制剂策略</span> <span class="badge badge-src-rd">BCS 驱动</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>按 BCS 分类给出<b>辅料方向提示</b>：BCS II（增溶剂/环糊精/固体分散体/微粉化）、III（渗透促进剂/脂质载体）、IV（组合策略）。需经兼容性实验确认。</div>
+        <div id="advExcipient"></div>
+      </section>
+
+      <!-- 逆合成分析提示（新增，轻量） -->
+      <section class="card" id="adv-retro-card">
+        <div class="card-title"><span data-i18n="ctAdvRetro">逆合成分析提示（轻量）</span> <span class="badge badge-src-rd">子结构切断</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>基于检出的官能团给出<b>候选切断键 + 对应人名反应/砌块</b>的启发式提示（非完整路线），用于快速构思合成策略与采购清单。完整路线仍需可行性/成本/专利核查。</div>
+        <div id="advRetro"></div>
+      </section>
+
+      <!-- 关键物性 / 传输性质 / 相平衡（新增） -->
+      <section class="card" id="adv-keyprops-card">
+        <div class="card-title"><span data-i18n="ctAdvKey">关键物性 / 传输性质 / 相平衡</span> <span class="badge badge-src-rd">RDKit + 外推</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>汇总<b>可计算传输物性</b>（logP/TPSA/MR/折射率/摩尔体积/氢键/柔性/芳香性）与<b>临界性质经验外推</b>（Tb/Tc/Pc/Vc/Tm）。临界值为经验关联、仅趋势参考，精确值需 Joback-Reid 或实验。</div>
+        <div id="advKeyProps"></div>
+      </section>
+
+      <!-- 量子化学 / 电子结构（新增，近似） -->
+      <section class="card" id="adv-electronic-card">
+        <div class="card-title"><span data-i18n="ctAdvQM">量子化学 / 电子结构（近似）</span> <span class="badge badge-src-rd">拓扑代理</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>纯前端无 QM 后端，给出<b>偶极矩拓扑代理</b>并诚实列出需真实 QM（DFT/半经验）方可计算的项（HOMO/LUMO、ESP 表面等），建议必要时外送 QM 服务计算回填。</div>
+        <div id="advElectronic"></div>
+      </section>
+
+      <!-- 有机溶剂溶解度预测（结果卡） -->
+      <section class="card" id="orgSolub-card">
+        <div class="card-title"><span data-i18n="ctOrgSolub">有机溶剂溶解度预测（文献基线校准 + 亲脂性/极性/熔点外推）</span> <span class="badge badge-src-rd">RDKit + 文献校准</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>基于文献《溶解度预测报告》中异噁唑啉羧酸中间体的有机溶剂溶解度基线，按<b>亲脂性（logP，+0.30·ΔlogP）、极性（TPSA，−0.004·ΔTPSA）、熔点（−0.01·ΔMP）</b>外推 17 种常用溶剂的溶解度（mg/mL），并给出<b>重结晶体系建议</b>（良溶剂＋反溶剂）与工艺/配液注意。可用于结晶、萃取、生物测试配液溶性评估。预测后将自动带入当前化合物。</div>
+        <div class="tool-body">
+          <label style="display:block">SMILES<textarea class="tool-area-sm" id="orgSolubSmiles" placeholder="如 CC(=O)Oc1ccccc1C(=O)O"></textarea></label>
+          <div class="tool-grid">
+            <label>熔点 MP (℃)<input class="tool-input" id="orgSolubMp" type="number" placeholder="如 180"></label>
+            <label>分子量 MW (自动)<input class="tool-input" id="orgSolubMw" type="number" placeholder="用当前化合物时自动填充" readonly></label>
+          </div>
+          <div class="action-row"><button class="btn btn-sm btn-secondary" id="orgSolubCalc" type="button">预测有机溶剂溶解度</button>
+            <button class="btn btn-sm btn-ghost" id="orgSolubUseCurrent" type="button">用当前化合物</button></div>
+          <div id="orgSolubOut"></div>
+        </div>
+      </section>
+
+      <!-- GSE pH–溶解度曲线（结果卡） -->
+      <section class="card" id="gsePh-card">
+        <div class="card-title"><span data-i18n="ctGsePh">GSE pH–溶解度曲线（含熔点项 · 两性/多基团 H-H 外推 · pI 最低点）</span> <span class="badge badge-src-rd">RDKit + GSE</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>基于 <b>GSE 方程</b> logS₀ = 0.5 − 0.01×(MP−25) − logP（mol/L），再用 <b>Henderson-Hasselbalch</b> 对酸性/碱性基团外推 pH–溶解度曲线。<b>两性/双电离分子</b>在 pI 处溶解度最低（净电荷为零的两性离子主导），远离 pI 因电离而升高。可与 QSAR 水溶解度（ESOL/Ali）对比。预测后将自动带入当前化合物 pKa。</div>
+        <div class="tool-body">
+          <label style="display:block">SMILES<textarea class="tool-area-sm" id="gsePhSmiles" placeholder="如 CC(=O)Oc1ccccc1C(=O)O"></textarea></label>
+          <div class="tool-grid">
+            <label>熔点 MP (℃)<input class="tool-input" id="gsePhMp" type="number" placeholder="如 180"></label>
+            <label>酸性 pKa（逗号分隔）<input class="tool-input" id="gsePhAcid" placeholder="如 5.03"></label>
+            <label>碱性 pKa（逗号分隔）<input class="tool-input" id="gsePhBase" placeholder="如 9.36"></label>
+          </div>
+          <div class="action-row"><button class="btn btn-sm btn-secondary" id="gsePhCalc" type="button">绘制 pH–溶解度曲线</button>
+            <button class="btn btn-sm btn-ghost" id="gsePhUseCurrent" type="button">用当前化合物</button></div>
+          <canvas id="gsePhCanvas" width="640" height="320" class="species-canvas"></canvas>
+          <canvas id="gsePhSpeciesCanvas" width="640" height="320" class="species-canvas" style="display:none"></canvas>
+          <div id="gsePhOut"></div>
+        </div>
+      </section>
+
+      <!-- 缓冲容量计算（结果卡） -->
+      <section class="card" id="bufferCap-card">
+        <div class="card-title"><span data-i18n="ctBufferCap">缓冲容量计算（Van Slyke β 公式 · pI 处最低 · 残留酸/CO₂ 干扰）</span> <span class="badge badge-src-rd">计算</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>基于 <b>Van Slyke 公式</b> β = 2.303·[ C·Σ Kaᵢ[H⁺]/(Kaᵢ+[H⁺])² + Kw/[H⁺] + [H⁺] ]（mol·L⁻¹·pH⁻¹），评估<b>两性游离碱在 pI 附近的极低缓冲风险</b>。pI 处 β 最小（两性离子主导，几乎无缓冲），极少量残留酸或溶入 CO₂ 即可显著扰动 pH。给出 pI 处 β、残留酸 ppm 阈值。默认 1% w/v，预测后自动带入当前化合物。</div>
+        <div class="tool-body">
+          <div class="row-note">基于 Van Slyke 公式 β = 2.303·[C·Σ Kaᵢ[H⁺]/(Kaᵢ+[H⁺])² + Kw/[H⁺] + [H⁺]]，单位 mol·L⁻¹·pH⁻¹，用于评估两性游离碱在 pI 附近的极低缓冲风险。</div>
+          <div class="tool-grid">
+            <label>浓度 % w/v<input class="tool-input" id="bufCapPct" type="number" step="0.1" value="1"></label>
+            <label>分子量 MW<input class="tool-input" id="bufCapMw" type="number" placeholder="用当前化合物时自动填充"></label>
+            <label>或直接填 mol/L<input class="tool-input" id="bufCapMolL" type="number" step="0.0001" placeholder="如 0.03"></label>
+            <label>酸性 pKa（逗号分隔）<input class="tool-input" id="bufCapAcid" placeholder="如 5.03"></label>
+            <label>碱性 pKa（逗号分隔）<input class="tool-input" id="bufCapBase" placeholder="如 9.36"></label>
+          </div>
+          <div class="action-row"><button class="btn btn-sm btn-secondary" id="bufferCapCalc" type="button">计算缓冲容量 β–pH</button>
+            <button class="btn btn-sm btn-ghost" id="bufferCapUseCurrent" type="button">用当前化合物</button></div>
+          <canvas id="bufferCapCanvas" width="640" height="320" class="species-canvas"></canvas>
+          <div id="bufferCapOut"></div>
+        </div>
+      </section>
+
+      <!-- pH 质量标准评估（结果卡） -->
+      <section class="card" id="phSpec-card">
+        <div class="card-title"><span data-i18n="ctPhSpec">pH 质量标准评估（两性游离碱 pH≈pI · CO₂ 干扰 · 残留酸 ppm 换算 · 限度修订）</span> <span class="badge badge-src-rd">计算</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>针对<b>两性游离碱</b>：水溶液 pH≈pI=(pKa酸+pKa碱)/2 且<b>与浓度基本无关</b>；低缓冲容量下 CO₂ 与残留酸极易扰动 pH。工具给出预测 pH、限度判定、pI 处 β 与残留酸 ppm 阈值、CO₂ 干扰提示，并基于文献评估给出<b>限度修订建议（6.5–8.0）</b>与测定方法规定。默认 1% w/v、限度 6.0–8.0，预测后自动带入当前化合物。</div>
+        <div class="tool-body">
+          <div class="row-note">针对两性游离碱（如普拉沙星 C₂₁H₂₁FN₄O₃）：水溶液 pH≈pI=(pKa酸+pKa碱)/2 且浓度基本无关；低缓冲容量下 CO₂ 与残留酸极易扰动 pH，故需明确限度与测定方法。</div>
+          <div class="tool-grid">
+            <label>酸性 pKa（逗号分隔）<input class="tool-input" id="phSpecAcid" placeholder="如 5.03"></label>
+            <label>碱性 pKa（逗号分隔）<input class="tool-input" id="phSpecBase" placeholder="如 9.36"></label>
+            <label>浓度 % w/v<input class="tool-input" id="phSpecPct" type="number" step="0.1" value="1"></label>
+            <label>分子量 MW<input class="tool-input" id="phSpecMw" type="number" placeholder="用当前化合物时自动填充"></label>
+            <label>或直接填 mol/L<input class="tool-input" id="phSpecMolL" type="number" step="0.0001" placeholder="如 0.03"></label>
+            <label>现行 pH 限度 下限<input class="tool-input" id="phSpecMin" type="number" step="0.1" value="6.0"></label>
+            <label>现行 pH 限度 上限<input class="tool-input" id="phSpecMax" type="number" step="0.1" value="8.0"></label>
+          </div>
+          <div class="action-row"><button class="btn btn-sm btn-secondary" id="phSpecCalc" type="button">评估 pH 质量标准</button>
+            <button class="btn btn-sm btn-ghost" id="phSpecUseCurrent" type="button">用当前化合物</button></div>
+          <canvas id="phSpecCanvas" width="640" height="320" class="species-canvas" style="display:none"></canvas>
+          <div id="phSpecOut"></div>
+        </div>
+      </section>
+      <div class="action-row export-row">
+        <button id="exportCsvBtn" class="btn btn-secondary" type="button" data-i18n="exportCsv">⬇ 导出 CSV</button>
+        <button id="exportJsonBtn" class="btn btn-secondary" type="button" data-i18n="exportJson">⬇ 导出 JSON</button>
+        <button id="printBtn" class="btn btn-ghost" type="button" data-i18n="printBtn">🖨 打印</button>
+      </div>
+
+      <div class="action-row external-row">
+        <span class="row-label" data-i18n="extRowLabel">外部数据库查询：</span>
+        <button id="chemspiderBtn" class="btn btn-ghost" type="button">🔗 SpectraBase</button>
+        <button id="chemicalizeBtn" class="btn btn-ghost" type="button">🔗 Chemicalize</button>
+        <span id="extNote" class="row-note" data-i18n="extNote">在新标签打开；SpectraBase 为 Wiley 免费谱图库（IR/MS/NMR/Raman），Chemicalize 免费网页版可手动补全</span>
+      </div>
+        </div>
+
+          <section class="card toolkit-card collapsed-toolkit" id="researchTools">
+      <div class="card-title-row">
+          <div class="card-title" style="margin:0;border:none;padding:0"><span data-i18n="toolkitTitle">🧪 工艺与法规研发工具箱</span> <span class="badge badge-neutral">本地 · 离线可用</span></div>
+        <button id="researchToolsToggleBtn" class="btn btn-sm btn-ghost section-toggle-btn" type="button" aria-expanded="false" title="展开 / 收起工具箱" data-i18n="toolkitToggle">📂 展开 ▼</button>
+      </div>
+      <div class="toolkit-collapse-body">
+        <div class="row-note" data-i18n="toolkitIntro">面向原料药工艺研发的辅助计算工具（理化性质、法规杂质、工艺绿色化、结构识别、项目管理）。全部为<b>前端启发式估算</b>，仅供研发参考，非监管用途。</div>
+
+        <div class="tool-group-title">理化性质与谱图</div>
+        <details class="tool-block" data-tool="species">
+          <summary class="tool-head">① pKa 物种分布图（Henderson-Hasselbalch）</summary>
+          <div class="tool-body">
+            <div class="tool-grid">
+              <label>酸性 pKa（逗号分隔）<input class="tool-input" id="speciesAcid" placeholder="如 4.25, 9.8"></label>
+              <label>碱性 pKa（逗号分隔）<input class="tool-input" id="speciesBase" placeholder="如 4.6, 5.2"></label>
+              <label>pH 范围 min<input class="tool-input" id="speciesPhMin" type="number" value="0"></label>
+              <label>pH 范围 max<input class="tool-input" id="speciesPhMax" type="number" value="14"></label>
+            </div>
+            <div class="action-row"><button class="btn btn-sm btn-secondary" id="speciesCalc" type="button">绘制物种分布</button>
+              <button class="btn btn-sm btn-ghost" id="speciesUseCurrent" type="button">带入当前化合物 pKa</button></div>
+            <canvas id="speciesCanvas" width="640" height="320" class="species-canvas"></canvas>
+            <div id="speciesOut"></div>
+          </div>
+        </details>
+
+        <details class="tool-block" data-tool="nmr">
+          <summary class="tool-head">② NMR 化学位移估算（官能团环境经验区间）</summary>
+          <div class="tool-body">
+            <label style="display:block">SMILES<textarea class="tool-area-sm" id="nmrSmiles" placeholder="如 CC(=O)Oc1ccccc1C(=O)O"></textarea></label>
+            <div class="action-row">
+              <button class="btn btn-sm btn-secondary" id="nmrCalc" type="button">估算 ¹H/¹³C 信号</button>
+              <button class="btn btn-sm btn-ghost" id="nmrUseCurrent" type="button">用当前化合物</button>
+            </div>
+            <div id="nmrOut"></div>
+          </div>
+        </details>
+
+        <details class="tool-block" data-tool="logd">
+          <summary class="tool-head">③ logD–pH 曲线（脂溶性随 pH 变化）</summary>
+          <div class="tool-body">
+            <div class="row-note">基于当前化合物 logP 与 pKa（酸/碱位点）计算 <b>logD(pH) = logP + log₁₀(f₀)</b>，f₀ 为中性物种分数。用于成盐前后、胃肠道吸收与跨膜行为的 pH 依赖分析。</div>
+            <label style="display:block">SMILES<textarea class="tool-area-sm" id="logdSmiles" placeholder="如 CC(=O)Oc1ccccc1C(=O)O"></textarea></label>
+            <div class="action-row">
+              <button class="btn btn-sm btn-secondary" id="logdCalc" type="button">绘制 logD–pH 曲线</button>
+              <button class="btn btn-sm btn-ghost" id="logdUseCurrent" type="button">用当前化合物</button>
+            </div>
+            <canvas id="logdCanvas" width="640" height="300" class="species-canvas"></canvas>
+            <div id="logdOut"></div>
+          </div>
+        </details>
+
+        <div class="tool-group-title">工艺与绿色化学</div>
+        <details class="tool-block" data-tool="routeEval">
+          <summary class="tool-head">④ 路线评估（原子经济性 / PMI / 步数经济性）</summary>
+          <div class="tool-body">
+            <div class="tool-grid">
+              <label>产物(API) MW<input class="tool-input" id="reProductMW" type="number" min="0" placeholder="如 300"></label>
+              <label>反应收率 %<input class="tool-input" id="reYield" type="number" min="0" max="100" placeholder="如 85"></label>
+              <label>溶剂/试剂质量系数 (溶剂质量÷产物质量)<input class="tool-input" id="reSolvent" type="number" min="0" placeholder="如 25"></label>
+            </div>
+            <div class="row-note">填写反应物（MW + 当量），用于原子经济性 AE = MW产物 ÷ Σ(当量×MW)。</div>
+            <div id="routeEvalReactants" class="rc-box"></div>
+            <div class="action-row"><button class="btn btn-sm btn-ghost" id="routeEvalAdd" type="button">+ 增加反应物</button>
+              <button class="btn btn-sm btn-secondary" id="routeEvalCalc" type="button">评估路线</button></div>
+            <div id="routeEvalOut"></div>
+          </div>
+        </details>
+
+        <details class="tool-block" data-tool="solventGreen">
+          <summary class="tool-head">⑤ 溶剂绿色化建议（GSK / CHG / ICH Q3C）</summary>
+          <div class="tool-body">
+            <div class="row-note">勾选工艺中使用的溶剂，查看绿色化评级与替代建议。</div>
+            <div id="solventGreenBox" class="solvent-grid"></div>
+            <div class="action-row"><button class="btn btn-sm btn-secondary" id="solventGreenCalc" type="button">评估溶剂清单</button></div>
+            <div id="solventGreenOut"></div>
+          </div>
+        </details>
+
+        <details class="tool-block" data-tool="saltScreen">
+          <summary class="tool-head">⑥ 盐型筛选评分（启发式）</summary>
+          <div class="tool-body">
+            <div class="tool-chk">
+              <label><input type="checkbox" id="saltHygro"> 已知吸湿敏感（吸湿性强的盐减分）</label>
+              <label><input type="checkbox" id="saltSol"> 需提升溶解度（溶解度强的盐加分）</label>
+            </div>
+            <div class="action-row"><button class="btn btn-sm btn-secondary" id="saltScreenCalc" type="button">生成盐型评分排序</button></div>
+            <div id="saltScreenOut"></div>
+          </div>
+        </details>
+
+        <div class="tool-group-title">法规与杂质</div>
+        <details class="tool-block" data-tool="genotox">
+          <summary class="tool-head">⑦ 基因毒性杂质限度计算器（ICH M7 · TTC）</summary>
+          <div class="tool-body">
+            <div class="tool-grid">
+              <label>杂质分子量 MWT (g/mol)<input class="tool-input" id="genotoxMwt" type="number" min="0" placeholder="如 150"></label>
+              <label>每日最大给药剂量 (mg/天)<input class="tool-input" id="genotoxDose" type="number" min="0" placeholder="如 100"></label>
+              <label>给药周期<select class="tool-input" id="genotoxPeriod"><option value="chronic">长期(&gt;365天)</option><option value="mid">短期(14–365天)</option><option value="lt14">危及生命(≤14天)</option></select></label>
+              <label>杂质类别 (ICH M7)<select class="tool-input" id="genotoxClass"><option value="2">第2类(已知致突变)</option><option value="3">第3类(低关注)</option><option value="5">第5类(醛类等)</option><option value="1">第1类(已知致癌物)</option></select></label>
+            </div>
+            <div class="action-row">
+              <button class="btn btn-sm btn-secondary" id="genotoxCalc" type="button">计算限度</button>
+              <button class="btn btn-sm btn-primary" id="genotoxUseCurrent" type="button">⚡ 用当前化合物一键计算</button>
+              <button class="btn btn-sm btn-ghost" id="genotoxAutoUse" type="button">仅带入 MWT</button>
+            </div>
+            <div id="genotoxOut"></div>
+          </div>
+        </details>
+
+        <details class="tool-block" data-tool="regDraft">
+          <summary class="tool-head">⑧ 法规文档草稿（ICH M7 / CTD 3.2.S.3.2）</summary>
+          <div class="tool-body">
+            <div class="tool-grid">
+              <label>原料药名称<input class="tool-input" id="regApiName" placeholder="如 去甲文拉法辛"></label>
+              <label>杂质名称<input class="tool-input" id="regImpName" placeholder="如 亚硝胺杂质 X"></label>
+              <label>杂质类别<select class="tool-input" id="regImpClass"><option value="2">第2类</option><option value="3">第3类</option><option value="5">第5类</option><option value="1">第1类</option></select></label>
+              <label>拟定限度 (ppm)<input class="tool-input" id="regLimit" placeholder="如 15"></label>
+              <label>适用 TTC 基础<input class="tool-input" id="regTTC" placeholder="ICH M7 TTC (1.5 µg/天)"></label>
+            </div>
+            <label style="display:block;margin-top:8px">工艺路线简述<textarea class="tool-area-sm" id="regRoute" placeholder="如 以文拉法辛为起始，经去甲基化制得…"></textarea></label>
+            <div class="action-row"><button class="btn btn-sm btn-secondary" id="regDraftGen" type="button">生成法规草稿</button></div>
+            <div id="regDraftOut"></div>
+          </div>
+        </details>
+
+        <details class="tool-block" data-tool="impSpec">
+          <summary class="tool-head">⑨ 杂质谱追踪表（警示结构 → ICH Q3A 报告阈值）</summary>
+          <div class="tool-body">
+            <div class="row-note">把当前化合物的毒性/警示结构筛查结果整理成「杂质谱追踪表」：杂质（警示）名称、类别、风险等级、建议关注点；并按 ICH Q3A/Q3B 给出报告阈值参考。可导出 Excel 留档。</div>
+            <div class="action-row">
+              <button class="btn btn-sm btn-secondary" id="impSpecCalc" type="button">生成杂质谱追踪表</button>
+              <button class="btn btn-sm btn-ghost" id="impSpecUseCurrent" type="button">用当前化合物</button>
+              <button class="btn btn-sm btn-ghost" id="impSpecExport" type="button">⬇ 导出 Excel</button>
+            </div>
+            <div id="impSpecOut"></div>
+          </div>
+        </details>
+
+        <details class="tool-block" data-tool="impList">
+          <summary class="tool-head">⑩ 多杂质清单管理（批次杂质表 → 一键评估 Excel）</summary>
+          <div class="tool-body">
+            <div class="row-note">维护一个 API 的<b>多杂质清单</b>（每个杂质：名称 / CAS / SMILES / 类别 / 限度 / 备注），支持批量添加（含当前化合物）、编辑、删除，一键生成杂质评估 Excel（QS-1 限度 + API 杂质明细 双 Sheet）。localStorage 持久化。</div>
+            <div class="tool-grid">
+              <label>杂质名称<input class="tool-input" id="impName" placeholder="如 去甲文拉法辛 N-氧化物"></label>
+              <label>CAS<input class="tool-input" id="impCas" placeholder="如 150307-88-5"></label>
+              <label>类别(ICH M7)<select class="tool-input" id="impClassSel"><option value="2">第2类</option><option value="3">第3类</option><option value="5">第5类</option><option value="4">第4类</option><option value="1">第1类</option></select></label>
+              <label>拟定限度 (ppm)<input class="tool-input" id="impLimit" type="number" min="0" placeholder="如 15"></label>
+            </div>
+            <label style="display:block;margin-top:8px">备注<textarea class="tool-area-sm" id="impNote" placeholder="来源/关注点（可选）"></textarea></label>
+            <div class="action-row">
+              <button class="btn btn-sm btn-secondary" id="impAdd" type="button">+ 添加杂质</button>
+              <button class="btn btn-sm btn-ghost" id="impUseCurrent" type="button">用当前化合物填充</button>
+              <button class="btn btn-sm btn-ghost" id="impClear" type="button">清空清单</button>
+            </div>
+            <div class="action-row">
+              <button class="btn btn-sm btn-secondary" id="impExportXlsx" type="button">⬇ 一键导出杂质评估 Excel</button>
+            </div>
+            <div id="impList"></div>
+          </div>
+        </details>
+
+        <div class="tool-group-title">对比、筛选与可及性</div>
+        <details class="tool-block" data-tool="compare">
+          <summary class="tool-head">⑪ 多化合物对比模式</summary>
+          <div class="tool-body">
+            <label style="display:block">每行一个 SMILES 或化合物名称<textarea class="tool-area" id="compareInput" placeholder="CC(=O)Oc1ccccc1C(=O)O&#10;c1ccccc1C(=O)N&#10;CN1C2CCC1CC(C2)OC"></textarea></label>
+            <div class="action-row"><button class="btn btn-sm btn-secondary" id="compareRun" type="button">计算并对比</button></div>
+            <div id="compareOut"></div>
+          </div>
+        </details>
+
+        <details class="tool-block" data-tool="heat">
+          <summary class="tool-head">⑫ 化合物 × 性质热力图矩阵（批量对比）</summary>
+          <div class="tool-body">
+            <div class="row-note">每行一个 SMILES（或名称），自动计算 MW / logP / TPSA / HBD / HBA / RotB / 环数 并渲染为<b>热力图矩阵</b>（色块深浅 = 相对值），直观比较多化合物的性质分布。适合品种调研与批量筛选汇报。</div>
+            <label style="display:block">每行一个化合物<textarea class="tool-area" id="heatInput" placeholder="CC(=O)Oc1ccccc1C(=O)O&#10;c1ccccc1C(=O)N&#10;CN1C2CCC1CC(C2)OC"></textarea></label>
+            <div class="action-row">
+              <button class="btn btn-sm btn-secondary" id="heatRun" type="button">生成热力图矩阵</button>
+              <button class="btn btn-sm btn-ghost" id="heatCsv" type="button">⬇ 导出 CSV</button>
+            </div>
+            <div id="heatOut"></div>
+          </div>
+        </details>
+
+        <details class="tool-block" data-tool="sa">
+          <summary class="tool-head">⑬ 合成可及性评分（SA score 启发式）</summary>
+          <div class="tool-body">
+            <div class="row-note">基于 RDKit 结构复杂度（环系、手性中心、杂原子、季碳、长链等）的<b>启发式合成难度评分</b>：1 = 极易合成，10 = 极难。用于路线筛选前置判断，与原子经济性 / PMI 互补。非商业 SA score 精确模型，仅研发参考。</div>
+            <label style="display:block">SMILES<textarea class="tool-area-sm" id="saSmiles" placeholder="如 CC(=O)Oc1ccccc1C(=O)O"></textarea></label>
+            <div class="action-row">
+              <button class="btn btn-sm btn-secondary" id="saCalc" type="button">评估合成难度</button>
+              <button class="btn btn-sm btn-ghost" id="saUseCurrent" type="button">用当前化合物</button>
+            </div>
+            <div id="saOut"></div>
+          </div>
+        </details>
+
+        <div class="tool-group-title">结构与识别</div>
+        <details class="tool-block" data-tool="drawer">
+          <summary class="tool-head">⑭ 结构式构建器（SMILES 轻量编辑器）</summary>
+          <div class="tool-body">
+            <div class="row-note">轻量 SMILES 编辑器：直接输入 SMILES，或点击下方片段插入；实时预览结构并支持导出 SVG。<b>非矢量绘图（无键级手绘）</b>，复杂结构调整请配合专业绘制工具。</div>
+            <label style="display:block">SMILES<textarea class="tool-area-sm" id="drawerSmiles" placeholder="c1ccccc1C(=O)O"></textarea></label>
+            <div id="drawerPalette" class="drawer-palette"></div>
+            <div class="action-row">
+              <button class="btn btn-sm btn-secondary" id="drawerRender" type="button">渲染结构</button>
+              <button class="btn btn-sm btn-ghost" id="drawerExport" type="button">导出 SVG</button>
+              <button class="btn btn-sm btn-ghost" id="drawerUseCurrent" type="button">用当前化合物</button>
+            </div>
+            <div id="drawerImg" class="drawer-img"><span class="row-note">输入 SMILES 后此处显示结构。</span></div>
+          </div>
+        </details>
+
+        <details class="tool-block" data-tool="ocr">
+          <summary class="tool-head">⑮ 结构式图片识别（OCR → SMILES，在线 AI + 手动兜底）</summary>
+          <div class="tool-body">
+            <div class="row-note">上传或粘贴<b>结构式截图</b>（文献 / 专利 / 实验记录），前端调用 <b>MolScribe 深度学习模型</b>（MIT · HuggingFace 在线 API）识别为 SMILES。<b>在线识别不可用 / 不满意时</b>，可一键打开 decimer.ai / MolScribe 在线工具手动识别，或手动输入 SMILES。首次调用在线模型需等待 Space 唤醒（约 20–60s）。</div>
+            <div class="action-row">
+              <input type="file" id="ocrFile" accept="image/*" capture="environment" class="file-input" style="max-width:220px" />
+              <button class="btn btn-sm btn-secondary" id="ocrBtn" type="button">识别结构（在线 AI）</button>
+              <button class="btn btn-sm btn-ghost" id="ocrPasteBtn" type="button">📋 从剪贴板粘贴</button>
+              <button class="btn btn-sm btn-ghost" id="ocrManualBtn" type="button">✍ 手动输入 SMILES</button>
+              <button class="btn btn-sm btn-ghost" id="ocrWebBtn" type="button">🌐 打开在线识别工具</button>
+            </div>
+            <div id="ocrPreview" class="row-note" style="margin-top:8px">支持 PNG / JPG / WebP；建议清晰白底结构图。手机上「选择图片」会弹出<b>拍照或相册</b>；部分手机浏览器（如 iOS Safari）不支持剪贴板粘贴图片，请改用「选择图片」。</div>
+            <div class="sub-title" style="margin-top:12px">识别结果（SMILES）</div>
+            <label style="display:block">SMILES（可编辑）<textarea class="tool-area-sm" id="ocrResultInput" rows="2" placeholder="识别出的 SMILES 会自动填入这里，请核对 / 编辑后点击确认。"></textarea></label>
+            <div class="action-row">
+              <button class="btn btn-sm btn-primary" id="ocrConfirmBtn" type="button">✅ 确认使用并预测</button>
+            </div>
+            <div id="ocrResult"></div>
+          </div>
+        </details>
+
+        <div class="tool-group-title">数据与项目管理</div>
+        <details class="tool-block" data-tool="fav">
+          <summary class="tool-head">⑯ 化合物收藏夹（按项目分组管理）</summary>
+          <div class="tool-body">
+            <div class="row-note">收藏当前化合物并按项目分组（如 文拉法辛 / 艾多沙班 / PPI 类），本地持久化，刷新不丢；可导出 Excel 汇总。</div>
+            <div class="tool-grid">
+              <label>收藏名称<input class="tool-input" id="favName" placeholder="留空用化合物名"></label>
+              <label>项目/分组<input class="tool-input" id="favProject" placeholder="如 去甲文拉法辛"></label>
+            </div>
+            <div class="action-row">
+              <button class="btn btn-sm btn-secondary" id="favAdd" type="button">收藏当前化合物</button>
+              <button class="btn btn-sm btn-ghost" id="favExport" type="button">⬇ 导出 Excel</button>
+              <button class="btn btn-sm btn-ghost" id="favClear" type="button">清空收藏</button>
+            </div>
+            <div id="favList"></div>
+          </div>
+        </details>
+
+        <details class="tool-block" data-tool="dict">
+          <summary class="tool-head">⑰ 本地化合物词库自助导入（CSV / Excel）</summary>
+          <div class="tool-body">
+            <div class="row-note">上传 CSV / Excel（.xlsx/.xls）补充品种到本地识别词库（无需改代码）。列名支持：<b>c</b>(规范名)、<b>cm</b>(中文名，逗号分隔)、<b>of</b>(官方名/别名，逗号分隔)、<b>ab</b>(简称，逗号分隔)、<b>cas</b>、<b>cas_alt</b>(逗号分隔)、<b>s</b>(SMILES)、<b>cat</b>(类别)。导入后自动合并进识别词库并本地持久化（刷新不丢）。</div>
+            <div class="toolkit-row">
+              <input type="file" id="dictFileInput" accept=".csv,.xlsx,.xls" class="file-input" />
+              <button id="dictImportBtn" class="btn btn-sm btn-secondary" type="button">导入并合并</button>
+              <button id="dictClearBtn" class="btn btn-sm btn-ghost" type="button">清空导入</button>
+              <span id="dictImportStatus" class="row-note" style="margin:0"></span>
+            </div>
+            <div id="dictList"></div>
+          </div>
+        </details>
+
+        <details class="tool-block" data-tool="project">
+          <summary class="tool-head">⑱ 项目工作区（多品种并行管理）</summary>
+          <div class="tool-body">
+            <div class="row-note">按项目（如 去甲文拉法辛 / 艾多沙班 / PPI 类）组织化合物：创建项目 → 向项目添加当前化合物（含预测快照）→ 项目内点击化合物一键重查 → 项目整体导出 Excel。localStorage 持久化，刷新不丢。</div>
+            <div class="tool-grid">
+              <label>项目名称<input class="tool-input" id="projName" placeholder="如 去甲文拉法辛"></label>
+              <label>项目说明<input class="tool-input" id="projDesc" placeholder="可选，如 琥珀酸盐工艺"></label>
+            </div>
+            <div class="action-row">
+              <button class="btn btn-sm btn-secondary" id="projCreate" type="button">创建项目</button>
+              <button class="btn btn-sm btn-ghost" id="projAddCurrent" type="button">+ 加入当前化合物</button>
+              <button class="btn btn-sm btn-ghost" id="projExport" type="button">⬇ 导出项目 Excel</button>
+            </div>
+            <div id="projList"></div>
+          </div>
+        </details>
+
+      </div>
+    </section>
+
+      </div><!-- /result-layout -->
+
+    </section>
+
+    <!-- 批量结果 -->
+    <section id="batchSection" class="card batch-card hidden">
+      <div class="card-title" data-i18n="batchTitle">批量预测结果</div>
+      <div id="batchTableWrap" class="table-wrap"></div>
+      <div class="action-row">
+        <button id="batchExportCsv" class="btn btn-secondary" type="button" data-i18n="batchExportCsv">⬇ 导出全部 CSV</button>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="site-footer">
+    <span class="footer-copy">本地预测基于 RDKit WASM（离线可用）；实验/计算数据来自 PubChem PUG-REST。仅供研发参考，非监管用途。</span>
+    <button id="aboutToggle" class="btn btn-ghost footer-about-btn" type="button" title="数据来源与开源项目" data-i18n="aboutBtn">ℹ️ 说明</button>
+  </footer>
+
+  <!-- 说明：放在页面最后面 -->
+  <section id="aboutSection" class="card about-card hidden">
+    <div class="card-title" data-i18n="dataSources">数据来源与开源项目</div>
+    <div id="aboutContent"></div>
+  </section>
+
+  <!-- 计算动画遮罩：单条/批量预测期间显示，避免状态文字太小被忽略 -->
+  <div id="calcOverlay" class="calc-overlay hidden" aria-live="polite" aria-busy="true">
+    <div class="calc-box">
+      <div class="calc-spinner" aria-hidden="true"></div>
+      <div class="calc-text">正在计算…</div>
+      <div class="calc-bar hidden"><div class="calc-bar-fill"></div></div>
+      <div class="calc-sub">请稍候，预测完成后自动消失</div>
+    </div>
+  </div>
+
+  <!-- 一键置顶 -->
+  <button id="scrollTopBtn" class="scroll-top-btn" type="button" title="回到顶部" aria-label="回到顶部">
+    <svg class="scroll-top-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 20V4M5 11l7-7 7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </svg>
+  </button>
+
+  <script defer src="assets/rdkit-engine.js"></script>
+  <script defer src="assets/pubchem.js"></script>
+  <script defer src="assets/seed-db.js"></script>
+  <script defer src="assets/cas-kb.js"></script>
+  <script defer src="assets/predict.js"></script>
+  <script defer src="assets/examples.js"></script>
+  <script defer src="assets/compound-dict.js"></script>
+  <script defer src="assets/vendor/xlsx.full.min.js"></script>
+  <script defer src="assets/vendor/jszip.min.js"></script>
+  <script defer src="assets/research-tools.js"></script>
+  <script defer src="assets/advance.js"></script>
+  <script defer src="assets/app.js"></script>
+</body>
+</html>
