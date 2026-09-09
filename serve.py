@@ -1,9 +1,12 @@
 import os
-import sys
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
-PORT = int(os.environ.get("PORT", "3000"))
+# 本地默认 127.0.0.1:8080，避免 Windows 上撞 3000 / 绑定 0.0.0.0 权限问题。
+# 云部署可设 HOST=0.0.0.0 与平台注入的 PORT。
+HOST = os.environ.get("HOST", "127.0.0.1")
+PORT = int(os.environ.get("PORT", "8080"))
 ROOT = os.path.dirname(os.path.abspath(__file__))
+
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -13,9 +16,10 @@ class Handler(SimpleHTTPRequestHandler):
         # 减少日志噪音
         pass
 
+
 if __name__ == "__main__":
-    server = HTTPServer(("0.0.0.0", PORT), Handler)
-    print(f"Static server listening on 0.0.0.0:{PORT}, root={ROOT}", flush=True)
+    server = HTTPServer((HOST, PORT), Handler)
+    print(f"Static server listening on http://{HOST}:{PORT}/  root={ROOT}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -24,13 +24,13 @@ cd HHWYC
 
 ## 快速开始
 
-推荐使用仓库自带静态服务器（默认 `0.0.0.0:3000`，可用环境变量 `PORT` 覆盖）：
+推荐使用仓库自带静态服务器（默认 `127.0.0.1:8080`，可用环境变量 `HOST` / `PORT` 覆盖）：
 
 ```bash
 git clone https://github.com/cm4217/HHWYC.git
 cd HHWYC
 python serve.py
-# 浏览器访问 http://127.0.0.1:3000
+# 浏览器访问 http://127.0.0.1:8080
 ```
 
 也可：
@@ -51,7 +51,7 @@ python -m http.server 8080 --bind 127.0.0.1
 ```
 HHWYC/
 ├── index.html                 # 主页面（入口）
-├── serve.py                   # 静态服务器（默认 PORT=3000）
+├── serve.py                   # 静态服务器（默认 127.0.0.1:8080）
 ├── manifest.webmanifest       # PWA 清单
 ├── local_ocr_server.py        # 可选：本地结构式图片 OCR 服务
 ├── setup_ocr_server.bat       # Windows OCR 一键安装
