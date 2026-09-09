@@ -24,20 +24,28 @@ cd HHWYC
 
 ## 快速开始
 
-推荐使用仓库自带静态服务器（默认 `127.0.0.1:8080`，可用环境变量 `HOST` / `PORT` 覆盖）：
+### Windows（推荐）
+
+1. 首次：克隆或下载仓库并解压  
+2. **双击** `启动网站.bat`（会自动打开浏览器 → http://127.0.0.1:8080 ）  
+3. 以后要更新再启动：双击 `更新并启动.bat`
+
+也可在 PowerShell 中：
+
+```powershell
+cd HHWYC
+.\start.ps1
+```
+
+### 命令行（任意系统）
 
 ```bash
 git clone https://github.com/cm4217/HHWYC.git
 cd HHWYC
 python serve.py
-# 浏览器访问 http://127.0.0.1:8080
-```
-
-也可：
-
-```bash
-python -m http.server 8080 --bind 127.0.0.1
-# 访问 http://127.0.0.1:8080
+# 默认 http://127.0.0.1:8080 ，一般会自动打开浏览器
+# 不自动开浏览器：NO_BROWSER=1 python serve.py
+# 换端口：PORT=8090 python serve.py
 ```
 
 以 `http://localhost` 方式打开时，RDKit WASM 从本地 `assets/rdkit/` 加载，**性质预测可完全离线**（仅 PubChem 数据需要联网）。
