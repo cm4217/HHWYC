@@ -1360,8 +1360,25 @@
       btn.setAttribute('aria-selected', on ? 'true' : 'false');
     });
     card.querySelectorAll('.suite-tab-panel').forEach(panel => {
-      panel.classList.toggle('active', panel.getAttribute('data-suite-panel') === name);
+      const on = panel.getAttribute('data-suite-panel') === name;
+      panel.classList.toggle('active', on);
+      panel.setAttribute('aria-hidden', on ? 'false' : 'true');
+      panel.style.display = on ? 'block' : 'none';
+      if (on) panel.removeAttribute('hidden');
+      else panel.setAttribute('hidden', '');
     });
+    // 空页签占位：未计算时避免「点了没反应」的错觉
+    if (name === 'hansen') {
+      const box = $('advHansen');
+      if (box && !box.innerHTML.trim()) {
+        box.innerHTML = '<div class="row-note">请先点击上方「计算溶剂体系」</div>';
+      }
+    } else if (name === 'tempsol') {
+      const box = $('advTempSol');
+      if (box && !box.innerHTML.trim()) {
+        box.innerHTML = '<div class="row-note">请先点击上方「计算溶剂体系」</div>';
+      }
+    }
     if (opts && opts.scroll) {
       card.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
@@ -1375,16 +1392,28 @@
     suiteShowTab(tab, { scroll: true });
   }
 
+  function suiteOnTabClick(e) {
+    const btn = e.target && e.target.closest && e.target.closest('.suite-tab-btn');
+    if (!btn || !btn.getAttribute('data-suite-tab')) return;
+    // 仅响应本卡内按钮
+    const card = $('solvent-suite-card');
+    if (!card || !card.contains(btn)) return;
+    e.preventDefault();
+    suiteShowTab(btn.getAttribute('data-suite-tab'), { scroll: false });
+  }
+
   function suiteBindUi() {
     const card = $('solvent-suite-card');
-    if (!card || card.dataset.suiteBound === '1') return;
-    card.dataset.suiteBound = '1';
-    card.querySelectorAll('.suite-tab-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        suiteShowTab(btn.getAttribute('data-suite-tab'), { scroll: false });
-      });
-    });
-    window.addEventListener('hashchange', suiteHandleHash);
+    if (!card) return;
+    // 事件委托：可安全重复调用；已绑定则跳过，避免双绑
+    if (card.dataset.suiteBound !== '1') {
+      card.dataset.suiteBound = '1';
+      card.addEventListener('click', suiteOnTabClick);
+    }
+    if (!window.__suiteHashBound) {
+      window.__suiteHashBound = true;
+      window.addEventListener('hashchange', suiteHandleHash);
+    }
     // 首次进入若带旧锚点，切换对应 tab
     suiteHandleHash();
   }
@@ -1784,6 +1813,7 @@
     renderSuiteOrg(result);
     renderSuiteHansen(result);
     renderSuiteTemp(result);
+    suiteBindUi();
   }
 
   // 兼容旧名
@@ -1803,6 +1833,7 @@
     setOrgSolubMpSrc(mpInfo.source);
     suiteShowTab('orgsolub', { scroll: false });
     suiteCalc();
+    suiteBindUi();
   }
 
   /* ============ ⑳ GSE pH–溶解度曲线 ============ */
