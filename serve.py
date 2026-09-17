@@ -16,6 +16,14 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=ROOT, **kwargs)
 
+    def end_headers(self):
+        # 禁止浏览器/中间缓存卡住旧 JS/CSS/HTML（溶剂页签曾因旧 research-tools.js 无点击监听）
+        path = (self.path or "").split("?", 1)[0].lower()
+        if path.endswith((".html", ".js", ".css", ".mjs")) or path in ("", "/"):
+            self.send_header("Cache-Control", "no-cache, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+        super().end_headers()
+
     def log_message(self, fmt, *args):
         pass
 
