@@ -340,13 +340,18 @@ window.PubChem = (function () {
       if (local && local.canonicalSmiles) return local;
     }
     const built = buildResult(p, cid, syns, raw, canonical);
-    return enrichWithExperimental(built);
+    // 实验性质不阻塞主解析；需要时由 enrichWithExperimental 短超时补全
+    return built;
   }
 
   async function enrichWithExperimental(result) {
     if (!result || !result.cid) return result;
     try {
-      const exp = await getExperimentalProps(result.cid);
+      const exp = await Promise.race([
+        getExperimentalProps(result.cid),
+        new Promise(function (resolve) { setTimeout(function () { resolve(null); }, 2800); }),
+      ]);
+      if (!exp) return result;
       result.expSolubility = exp.expSolubility;
       result.expSolubilityUnit = exp.expSolubilityUnit;
       result.expMeltingPoint = exp.expMeltingPoint;

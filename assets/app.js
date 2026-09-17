@@ -578,7 +578,12 @@
   /* ---------- ACC11：标准化 + 共识预测包装 ---------- */
   function runPredictEnhanced(desc, pka, pubchem, eng, smiles, rdExtra) {
     if (window.Acc11 && typeof Acc11.enhanceAll === 'function') {
-      return Acc11.enhanceAll(desc, pka, pubchem, eng, smiles, rdExtra);
+      try {
+        return Acc11.enhanceAll(desc, pka, pubchem, eng, smiles, rdExtra);
+      } catch (eAcc) {
+        console.error('Acc11.enhanceAll failed, fallback Predict.all', eAcc);
+        return Predict.all(desc, pka);
+      }
     }
     return Predict.all(desc, pka);
   }
@@ -652,16 +657,24 @@
         if (standardize && standardize.standardized) smilesForCalc = standardize.standardized;
       }
     } catch (eStd) { standardize = { original: smiles, standardized: smiles, changed: false, note: '标准化跳过：' + (eStd && eStd.message) }; }
-    // 可选：补拉实验性质（若 resolve 未附带）
+    // 实验性质不阻塞 RDKit；首屏先出计算值，后台短超时补实验字段后必要时刷新
+    let _expRefresh = null;
     try {
       if (pc && pc.cid && window.PubChem && PubChem.enrichWithExperimental && pc.expPka == null && pc.expMeltingPoint == null) {
-        pc = await PubChem.enrichWithExperimental(pc);
+        _expRefresh = PubChem.enrichWithExperimental(pc).catch(function () { return pc; });
       }
-    } catch (eExp) {}
+    } catch (eExp) { _expRefresh = null; }
     const rd = eng.compute(smilesForCalc);
     if (standardize) rd.standardize = standardize;
     const pred = runPredictEnhanced(rd.desc, rd.pka, pc, eng, smilesForCalc, rd);
     smiles = smilesForCalc; // 后续缓存/展示用标准化后 SMILES
+    // 挂上实验性质后台 Promise，runSingle 渲染后可静默合并（不阻塞首屏）
+    if (_expRefresh) {
+      pred._expRefresh = _expRefresh.then(function (enriched) {
+        if (enriched) Object.assign(pc, enriched);
+        return enriched;
+      });
+    }
     let geometry = null;
     try { geometry = eng.computeGeometry(smiles); } catch (e) { geometry = null; }
     let toxicity = null;
@@ -815,17 +828,24 @@
     const formula = (pc && pc.formula) || rd.formula || '';
     const d = rd.desc;
     const mw = d.amw != null ? (+d.amw).toFixed(2) : '—';
-    const logp = d.CrippenClogP != null ? (+d.CrippenClogP).toFixed(2) : '—';
+    const lpMeta = data.pred && data.pred.logP;
+    const logpVal = (lpMeta && lpMeta.consensus != null) ? lpMeta.consensus
+      : (d.CrippenClogP != null ? d.CrippenClogP : null);
+    const logp = logpVal != null ? (+logpVal).toFixed(2) : '—';
+    const logpLabel = (lpMeta && lpMeta.models && lpMeta.models.length >= 2) ? '共识 logP' : 'logP';
     const tpsa = d.tpsa != null ? (+d.tpsa).toFixed(1) : '—';
     const sol = data.pred.solubility;
     const logs = (sol && sol.consensus) ? sol.consensus.logS.toFixed(2) : '—';
+    const uncLogS = data.pred && data.pred.uncertainty && data.pred.uncertainty.logS;
     const srcBadges = `<span class="badge badge-src-rd">RDKit 本地预测</span>` +
       (pc && pc.cid ? `<span class="badge badge-src-pub">PubChem CID ${pc.cid}</span>` :
        pc ? `<span class="badge badge-neutral">PubChem 未匹配 · 本地 SMILES 兜底</span>` :
-       `<span class="badge badge-neutral">PubChem 未匹配</span>`);
+       `<span class="badge badge-neutral">PubChem 未匹配</span>`) +
+      (lpMeta && lpMeta.models && lpMeta.models.length >= 2 ? `<span class="badge badge-neutral" title="${escapeHtml(lpMeta.note || '')}">Crippen+XLogP3</span>` : '') +
+      (uncLogS ? `<span class="badge badge-neutral" title="${escapeHtml(uncLogS.reason || '')}">logS置信 ${uncLogS.emoji || ''}${uncLogS.level || ''}</span>` : '');
     const stats = [
       { l: '分子量 MW', v: mw, u: 'g/mol', icon: 'weight', target: 'props-card' },
-      { l: 'logP', v: logp, icon: 'droplet', target: 'props-card' },
+      { l: logpLabel, v: logp, icon: 'droplet', target: 'props-card' },
       { l: 'logS', v: logs, u: 'mol/L', icon: 'glass', target: 'solubility-card' },
       { l: 'TPSA', v: tpsa, u: 'Å²', icon: 'sun', target: 'props-card' },
     ];
@@ -1127,7 +1147,7 @@
     // ACC11：结构标准化前后
     if (data.standardize) {
       const st = data.standardize;
-      html += '<div class="prop-group acc-std-block"><div class="prop-group-title">结构标准化（ACC11）</div>';
+      html += '<div class="prop-group acc-std-block"><div class="prop-group-title">结构标准化</div>';
       html += `<div class="row-note">输入：<code>${escapeHtml(st.original || '')}</code></div>`;
       html += `<div class="row-note">标准化后：<code>${escapeHtml(st.standardized || '')}</code>` +
         (st.changed ? ' <span class="badge badge-ok">已变更</span>' : ' <span class="badge badge-neutral">未变</span>') + '</div>';
@@ -1186,7 +1206,7 @@
     let html = '';
     const meta = data.pred && data.pred.descriptorsMeta;
     if (meta) {
-      html += '<div class="sub-title" style="margin-top:14px">描述符增强（ACC11）</div>';
+      html += '<div class="sub-title" style="margin-top:14px">可用描述符</div>';
       html += `<div class="row-note">可用数值描述符 <b>${meta.count}</b> 项。${escapeHtml(meta.note || '')}</div>`;
       if (meta.missing && meta.missing.length) {
         html += `<div class="row-note">本 WASM 未返回（节选）：${meta.missing.slice(0, 12).map(escapeHtml).join(', ')}${meta.missing.length > 12 ? '…' : ''}</div>`;
@@ -1194,7 +1214,7 @@
     }
     const c3 = data.pred && data.pred.compare3d;
     if (c3) {
-      html += '<div class="sub-title" style="margin-top:14px">3D 对照（ACC11）</div>';
+      html += '<div class="sub-title" style="margin-top:14px">3D / 2D 对照</div>';
       if (!c3.supported && c3.fallback) {
         html += `<div class="acc-3d-fallback"><span class="badge badge-warn">${escapeHtml(c3.fallback.title)}</span>`;
         html += '<table class="data prop-table"><thead><tr><th>2D 对照项</th><th>数值</th></tr></thead><tbody>';
@@ -2402,6 +2422,23 @@
       updateCalcOverlay('⑤ 渲染结果卡片…');
       renderHero(data); renderIdentity(data); renderProps(data); renderForm(data); renderSpectra(data); renderSpectraLinks(data); renderSolubility(data); renderThermo(data); renderToxicity(data); renderImpurity(data); renderConformer(data); renderLead(data); renderADME(data); renderRadar(data);
       if (window.Advance) { try { Advance.renderAll(data); } catch (e) { console.error('Advance.renderAll failed:', e); } }
+      // 后台实验性质就绪后，仅刷新理化卡中的实验/计算分列（不重跑 RDKit）
+      if (data.pred && data.pred._expRefresh) {
+        data.pred._expRefresh.then(function () {
+          try {
+            if (window.Acc11 && Acc11.enhanceAll && data.rdkit) {
+              const refreshed = Acc11.enhanceAll(data.rdkit.desc, data.rdkit.pka, data.pubchem, window.RDKitEngine, data.smiles, data.rdkit);
+              if (refreshed) {
+                data.pred.experimental = refreshed.experimental;
+                data.pred.pka = refreshed.pka || data.pred.pka;
+                data.pred.logP = refreshed.logP || data.pred.logP;
+                renderProps(data);
+                renderHero(data);
+              }
+            }
+          } catch (eRef) { console.warn('experimental refresh skipped', eRef); }
+        });
+      }
       updateIonizableCardVisibility(data);
       els.resultSection.classList.remove('hidden');
       els.batchSection.classList.add('hidden');
