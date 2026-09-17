@@ -37,78 +37,82 @@ window.RDKitEngine = (function () {
   async function init() {
     // 返回 window.RDKitEngine 包装对象（含 compute），而非原始 RDKit 模块
     if (rdkit) return window.RDKitEngine;
-    if (loadingPromise) { await loadingPromise; return window.RDKitEngine; }
 
-    loadingPromise = (async () => {
-      // file:// 协议下浏览器会拦截 fetch() 读取本地 wasm
-      const isFileProtocol = typeof location !== 'undefined' && location.protocol === 'file:';
+    // 禁止并行 init：已有进行中的加载则复用同一 promise，避免超时后双开 WASM
+    if (!loadingPromise) {
+      loadingPromise = (async () => {
+        // file:// 协议下浏览器会拦截 fetch() 读取本地 wasm
+        const isFileProtocol = typeof location !== 'undefined' && location.protocol === 'file:';
 
-      if (typeof window.initRDKitModule === 'function') {
-        // 页面 <head> 的本地脚本已就绪
-        usedLocal = !isFileProtocol;
-      } else {
-        // 1) 尝试本地动态加载
-        try {
-          await loadScript(LOCAL_URL);
+        if (typeof window.initRDKitModule === 'function') {
+          // 页面 <head> 的本地脚本已就绪
           usedLocal = !isFileProtocol;
-        } catch (e) {
-          // 2) 回退 CDN JS
-          await loadScript(CDN_URL);
-          usedLocal = false;
-        }
-      }
-      if (typeof window.initRDKitModule !== 'function') {
-        throw new Error('RDKit JS 引擎加载失败（本地与 CDN 均不可用，请检查网络或 assets/rdkit 目录）。');
-      }
-
-      // wasm 二进制候选，按优先级：
-      //   A) 本地文件 fetch（http/https 同源，最轻量）
-      //   B) base64 内嵌（.js 内联，file:// 与预览服务器等任何环境都可用，真正离线）
-      //   C) CDN fetch（联网兜底）
-      const candidates = [];
-      if (!isFileProtocol) candidates.push({ kind: 'fetch', dir: 'assets/rdkit/', label: 'local' });
-      candidates.push({ kind: 'b64', label: 'embedded' });
-      candidates.push({ kind: 'fetch', dir: CDN_BASE, label: 'cdn' });
-
-      let lastErr = null;
-      for (const c of candidates) {
-        try {
-          if (c.kind === 'fetch') {
-            rdkit = await window.initRDKitModule({ locateFile: (f) => c.dir + f });
-          } else {
-            // 按需懒加载 base64 脚本（.js 在任何环境下都允许加载，无 8MB 常驻开销）
-            if (typeof window.RDKIT_WASM_B64 !== 'string') {
-              await loadScript(LOCAL_B64_URL);
-            }
-            if (typeof window.RDKIT_WASM_B64 !== 'string') throw new Error('base64 内嵌数据缺失');
-            const bytes = b64ToUint8(window.RDKIT_WASM_B64);
-            rdkit = await window.initRDKitModule({
-              locateFile: (f) => 'assets/rdkit/' + f,
-              wasmBinary: bytes,
-            });
+        } else {
+          // 1) 尝试本地动态加载
+          try {
+            await loadScript(LOCAL_URL);
+            usedLocal = !isFileProtocol;
+          } catch (e) {
+            // 2) 回退 CDN JS
+            await loadScript(CDN_URL);
+            usedLocal = false;
           }
-          usedLocal = c.label === 'local' || c.label === 'embedded';
-          window.RDKit = rdkit; // 暴露原始 RDKit 模块，供 SMILES 校验等使用
-          return rdkit;
-        } catch (e) {
-          lastErr = e;
         }
-      }
-      throw new Error('RDKit WASM 加载失败：' + (lastErr && lastErr.message) + '。建议通过本地 http 服务器打开（python -m http.server），或允许联网使用 CDN 兜底。');
-    })();
-    loadingPromise.catch(() => {}); // 避免内部挂起/失败时出现未处理的 rejection 警告
+        if (typeof window.initRDKitModule !== 'function') {
+          throw new Error('RDKit JS 引擎加载失败（本地与 CDN 均不可用，请检查网络或 assets/rdkit 目录）。');
+        }
 
-    // v20250829u：为 init 增加超时上限。部分环境（预览服务器按扩展名白名单拦截 .wasm、
-    // CDN 被代理拦截、或 Emscripten WASM 实例化卡死）会导致 initRDKitModule 永不 resolve，
-    // 进而使整个预测流程（await RDKitEngine.init()）静默挂起。超时后清除挂起引用并抛出，
-    // 由上层 runSingle 的 catch 渲染错误，而非无限转圈。
+        // wasm 二进制候选，按优先级：
+        //   A) 本地文件 fetch（http/https 同源，最轻量）
+        //   B) base64 内嵌（.js 内联，file:// 与预览服务器等任何环境都可用，真正离线）
+        //   C) CDN fetch（联网兜底）
+        const candidates = [];
+        if (!isFileProtocol) candidates.push({ kind: 'fetch', dir: 'assets/rdkit/', label: 'local' });
+        candidates.push({ kind: 'b64', label: 'embedded' });
+        candidates.push({ kind: 'fetch', dir: CDN_BASE, label: 'cdn' });
+
+        let lastErr = null;
+        for (const c of candidates) {
+          try {
+            if (c.kind === 'fetch') {
+              rdkit = await window.initRDKitModule({ locateFile: (f) => c.dir + f });
+            } else {
+              // 按需懒加载 base64 脚本（.js 在任何环境下都允许加载，无 8MB 常驻开销）
+              if (typeof window.RDKIT_WASM_B64 !== 'string') {
+                await loadScript(LOCAL_B64_URL);
+              }
+              if (typeof window.RDKIT_WASM_B64 !== 'string') throw new Error('base64 内嵌数据缺失');
+              const bytes = b64ToUint8(window.RDKIT_WASM_B64);
+              rdkit = await window.initRDKitModule({
+                locateFile: (f) => 'assets/rdkit/' + f,
+                wasmBinary: bytes,
+              });
+            }
+            usedLocal = c.label === 'local' || c.label === 'embedded';
+            window.RDKit = rdkit; // 暴露原始 RDKit 模块，供 SMILES 校验等使用
+            return rdkit;
+          } catch (e) {
+            lastErr = e;
+          }
+        }
+        throw new Error('RDKit WASM 加载失败：' + (lastErr && lastErr.message) + '。建议通过本地 http 服务器打开（python -m http.server），或允许联网使用 CDN 兜底。');
+      })();
+      loadingPromise.catch(() => {}); // 避免内部挂起/失败时出现未处理的 rejection 警告
+      // 仅在真实加载失败时清空，允许后续重试；超时不得清空（原 IIFE 仍可能跑完）
+      loadingPromise.then(
+        () => {},
+        () => { loadingPromise = null; }
+      );
+    }
+
+    // 超时只拒绝当前等待方，保留同一 loadingPromise，禁止并行二次 init
     const TIMEOUT = 20000;
     const timeout = new Promise((_, reject) =>
       setTimeout(() => reject(new Error('RDKit 引擎加载超时（20s），请刷新页面或检查网络后重试。')), TIMEOUT));
     try {
       await Promise.race([loadingPromise, timeout]);
     } catch (e) {
-      loadingPromise = null; // 允许后续预测重试重新加载
+      if (rdkit) return window.RDKitEngine; // 竞态：界面超时但引擎实际已就绪
       throw e;
     }
     return window.RDKitEngine;

@@ -124,7 +124,7 @@
           <div class="ocr-server-row">
             <div class="ocr-server-header">
               <label for="localOcrUrl" data-i18n="localOcrUrlLabel">本地 OCR 服务地址（推荐）</label>
-              <button id="localOcrInstallBtn" class="btn btn-sm btn-primary" type="button" data-i18n="localOcrInstall">🚀 一键安装并启动本地服务</button>
+              <button id="localOcrInstallBtn" class="btn btn-sm btn-primary" type="button" data-i18n="localOcrInstall">🚀 展开本地服务安装向导</button>
             </div>
             <div class="ocr-server-inputs">
               <input type="url" id="localOcrUrl" class="local-ocr-url" value="http://localhost:8765" placeholder="http://localhost:8765" />
@@ -810,7 +810,7 @@
   </section>
 
   <!-- 计算动画遮罩：单条/批量预测期间显示，避免状态文字太小被忽略 -->
-  <div id="calcOverlay" class="calc-overlay hidden" aria-live="polite" aria-busy="true">
+  <div id="calcOverlay" class="calc-overlay hidden" aria-live="polite" aria-busy="false">
     <div class="calc-box">
       <div class="calc-spinner" aria-hidden="true"></div>
       <div class="calc-text">正在计算…</div>

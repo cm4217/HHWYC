@@ -182,6 +182,7 @@
     const t = els.calcOverlay.querySelector('.calc-text');
     if (t) t.textContent = text || '正在计算…';
     els.calcOverlay.classList.remove('hidden');
+    els.calcOverlay.setAttribute('aria-busy', 'true');
     document.body.classList.add('calc-lock');
   }
   function updateCalcOverlay(text) {
@@ -202,6 +203,7 @@
   function hideCalcOverlay() {
     if (!els.calcOverlay) return;
     els.calcOverlay.classList.add('hidden');
+    els.calcOverlay.setAttribute('aria-busy', 'false');
     document.body.classList.remove('calc-lock');
   }
   function csvEscape(v) {
@@ -597,9 +599,11 @@
     }
 
     // ⑨ 结果缓存：命中则复用已计算的描述符/警示（跳过 RDKit 重算），秒回
-    const cacheKey = (type === 'smiles' ? raw.trim() : smiles);
+    // 统一用已解析的 smiles 作主键；SMILES 输入时兼查 raw.trim()，并与写入侧双写对齐，避免非 canonical 再查 miss
     const cache = loadResultCache();
-    const hit = cache && cache[cacheKey];
+    const inputKey = raw.trim();
+    let hit = cache && cache[smiles];
+    if (!hit && type === 'smiles' && inputKey && inputKey !== smiles) hit = cache[inputKey];
 
     // ⑩ 角色智能识别：调用方显式传入具体角色（非 unknown）时优先采用（用户/批量统一指定）；
     // 否则优先复用结果缓存中已记忆的角色（跨会话自进化），再回退到自动识别；均无法确定则为 unknown。
@@ -608,6 +612,12 @@
 
     if (hit && hit.desc && hit.pka) {
       updateCalcOverlay('③ 命中本地缓存，秒回结果…');
+      updateEngineStatus(); // 缓存命中也刷新引擎徽标，避免一直停在「未加载」
+      if (els.engineStatus && !(window.RDKitEngine && RDKitEngine.source)) {
+        els.engineStatus.textContent = '✓ 命中本地缓存';
+        els.engineStatus.className = 'badge badge-ok';
+        els.engineStatus.title = '本次结果来自本地缓存，未重新加载 RDKit 引擎。';
+      }
       const rdCached = {
         desc: hit.desc, pka: hit.pka, smiles,
         svg: hit.svg || '', inchi: hit.inchi || '', inchikey: hit.inchikey || '',
@@ -684,9 +694,9 @@
     if (!lastSingle || !lastSingle.smiles) return;
     const d = lastSingle;
     const cache = loadResultCache();
-    const key = d.smiles;
+    const key = d.smiles; // 主键：解析后的 SMILES（与读取侧统一）
     try {
-      cache[key] = {
+      const entry = {
         t: Date.now(),
         desc: d.rdkit ? d.rdkit.desc : null,
         pka: d.rdkit ? d.rdkit.pka : null,
@@ -706,6 +716,9 @@
         geometry: d.geometry || null,
         role: d.role || 'unknown',
       };
+      cache[key] = entry;
+      // 双写：SMILES 输入与解析结果不一致时，用原始输入再索引一次，避免非 canonical 再查 miss
+      if (d.type === 'smiles' && d.input && d.input !== key) cache[d.input] = entry;
       saveResultCache();
     } catch (e) {}
   }
@@ -2741,7 +2754,7 @@
     imageOcrRunBtn: { zh: 'AI 识别结构', en: 'AI Recognize Structure' },
     localOcrUrlLabel: { zh: '本地 OCR 服务地址（推荐）', en: 'Local OCR server URL (recommended)' },
     localOcrTest: { zh: '检测', en: 'Test' },
-    localOcrInstall: { zh: '🚀 一键安装并启动本地服务', en: '🚀 One-click install local server' },
+    localOcrInstall: { zh: '🚀 展开本地服务安装向导', en: '🚀 Show local server setup guide' },
     localOcrHint: { zh: '💡 在线 OCR 服务目前不稳定。使用本机 OCR 服务可离线识别、数据不出内网，且成功率最高。', en: '💡 Online OCR services are currently unstable. Use a local OCR server for offline, in-house recognition with the highest success rate.' },
     historyTitle: { zh: '🕘 查询历史', en: '🕘 History' },
     historyExpand: { zh: '📂 展开历史', en: '📂 Expand' },
@@ -3746,7 +3759,7 @@
           ${localTip}
           ${detailHtml}
           <div class="ocr-fail-actions">
-            <button class="btn btn-sm btn-primary" id="ocrFailInstall" type="button">🚀 一键安装本地服务</button>
+            <button class="btn btn-sm btn-primary" id="ocrFailInstall" type="button">🚀 展开本地服务安装向导</button>
             <button class="btn btn-sm btn-secondary" id="ocrFailCopyCmd" type="button">📋 复制手动命令</button>
             <button class="btn btn-sm btn-ghost" id="ocrFailUpload" type="button">📁 重新上传</button>
             <button class="btn btn-sm btn-ghost" id="ocrFailPaste" type="button">重新粘贴</button>
@@ -3803,7 +3816,7 @@
     function toggleLocalOcrGuide() {
       if (!els.localOcrGuide) return;
       const hidden = els.localOcrGuide.classList.toggle('hidden');
-      if (els.localOcrInstallBtn) els.localOcrInstallBtn.textContent = hidden ? (T('localOcrInstall') || '🚀 一键安装并启动本地服务') : '🔼 收起安装向导';
+      if (els.localOcrInstallBtn) els.localOcrInstallBtn.textContent = hidden ? (T('localOcrInstall') || '🚀 展开本地服务安装向导') : '🔼 收起安装向导';
       if (!hidden && mainOcrStatus) mainOcrStatus.innerHTML = '<span class="row-note">已展开安装向导，请按步骤操作。</span>';
     }
     async function copyLocalOcrCmd() {
