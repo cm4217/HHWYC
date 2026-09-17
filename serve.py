@@ -28,7 +28,16 @@ def _open_browser(url: str) -> None:
 
 
 if __name__ == "__main__":
-    server = HTTPServer((HOST, PORT), Handler)
+    try:
+        server = HTTPServer((HOST, PORT), Handler)
+    except OSError as e:
+        print(f"无法绑定 {HOST}:{PORT}（{e}）。", flush=True)
+        print("端口可能已被占用。请换端口后重试，例如：", flush=True)
+        print("  Windows PowerShell:  $env:PORT=8090; python serve.py", flush=True)
+        print("  CMD:                 set PORT=8090 && python serve.py", flush=True)
+        print("  或：                 PORT=8090 python serve.py", flush=True)
+        raise SystemExit(1) from e
+
     url = f"http://{HOST}:{PORT}/"
     print(f"Static server listening on {url}  root={ROOT}", flush=True)
     print("按 Ctrl+C 停止服务", flush=True)

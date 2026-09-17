@@ -274,6 +274,8 @@ textarea:focus, select:focus, input[type="text"]:focus {
 .not-found { border-left: 4px solid var(--warn); background: var(--warn-soft); }
 .not-found-title { font-weight: 700; color: var(--warn); font-size: 15px; margin-bottom: 8px; }
 .not-found-body p { margin: 0 0 10px; color: var(--ink); }
+.not-found.run-error { border-left-color: var(--danger, #dc2626); background: var(--danger-soft, #fef2f2); }
+.not-found.run-error .run-error-title { color: var(--danger, #dc2626); }
 .ext-links { display: flex; flex-wrap: wrap; gap: 8px; }
 .ext-links a { text-decoration: none; }
 

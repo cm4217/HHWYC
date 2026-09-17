@@ -962,10 +962,41 @@
         ${(type === 'cas' || type === 'name' || type === 'auto') ? `<div class="row-note" style="margin-top:6px;color:var(--brand,#2563eb)" data-i18n="nfQueueNote">该标识已记入「🧠 知识库」的自进化失败队列；可在知识库中手动补充其 SMILES 以便下次离线命中。</div>` : ''}
       </div>`;
     els.notFoundPanel.classList.remove('hidden');
+    els.notFoundPanel.classList.remove('run-error');
     updateIonizableCardVisibility(null);
     applyI18nDom();
   }
-  function hideNotFound() { if (els.notFoundPanel) els.notFoundPanel.classList.add('hidden'); }
+  function hideNotFound() { if (els.notFoundPanel) { els.notFoundPanel.classList.add('hidden'); els.notFoundPanel.classList.remove('run-error'); } }
+
+  /** 将 runSingle 异常分流：识别失败 → not-found；引擎/结构等 → 专用错误卡 */
+  function classifyRunError(err) {
+    const msg = err && err.message != null ? String(err.message) : String(err || '');
+    if (/未能在 PubChem|未能匹配该|请直接输入 SMILES/.test(msg)) return 'not-found';
+    if (/无法解析该结构|无法解析|结构是否正确|描述符解析失败/.test(msg)) return 'structure';
+    if (/RDKit|WASM|引擎|加载失败|尚未初始化|base64/.test(msg)) return 'engine';
+    return 'engine';
+  }
+  function renderRunError(kind, message, raw) {
+    const title = kind === 'structure'
+      ? '结构解析失败'
+      : '引擎或计算出错';
+    const tips = kind === 'structure'
+      ? '当前标识已解析到字符串，但 RDKit 无法建成有效分子。请核对 SMILES / InChI 是否完整、括号与芳香性标记是否正确；也可改用更规范的规范 SMILES 再试。'
+      : '本地 RDKit / WASM 未能完成计算。常见原因：引擎脚本未加载、WASM 被拦截、或网络 CDN 兜底失败。建议用仓库内 start.ps1 / serve.py 以本地 http 打开本站后重试。';
+    const safeMsg = escapeHtml(message || '未知错误');
+    const safeRaw = escapeHtml(raw || '');
+    els.notFoundPanel.innerHTML = `<div class="not-found-title run-error-title">${title}</div>
+      <div class="not-found-body run-error-body">
+        <p>${tips}</p>
+        <p class="row-note" style="margin:8px 0 0">详情：<code>${safeMsg}</code></p>
+        ${safeRaw ? `<p class="row-note" style="margin:6px 0 0">输入：<code>${safeRaw}</code></p>` : ''}
+        <div class="row-note" style="margin-top:10px">这与「化合物未收录」不同：无需去外部库搜名字；先确认本地服务与结构本身是否正常。</div>
+      </div>`;
+    els.notFoundPanel.classList.remove('hidden');
+    els.notFoundPanel.classList.add('run-error');
+    updateIonizableCardVisibility(null);
+    applyI18nDom();
+  }
 
   /* ---------- 内联 SVG 图标集（指标卡 / Hero KPI 共用） ---------- */
   const ICONS = {
@@ -2252,7 +2283,9 @@
       if (mySeq !== _runSeq || (e && e.message === 'SUPERSEDED')) return; // 被新查询取代，静默放弃，不报错不渲染
       const type = els.inputType.value === 'auto' ? detectType(raw) : els.inputType.value;
       setStatus('错误：' + e.message, 'err');
-      renderNotFound(raw, type);
+      const kind = classifyRunError(e);
+      if (kind === 'not-found') renderNotFound(raw, type);
+      else renderRunError(kind, e.message, raw);
       els.resultSection.classList.remove('hidden');
       els.batchSection.classList.add('hidden');
       els.resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -2680,14 +2713,14 @@
     roleApi: { zh: '原料药 (API)', en: 'API' },
     roleImpurity: { zh: '杂质', en: 'Impurity' },
     roleReagent: { zh: '试剂', en: 'Reagent' },
-    roleUnknown: { zh: '未指定', en: 'Unspecified' },
+    roleUnknown: { zh: '自动', en: 'Auto' },
     roleAuto: { zh: '已自动识别', en: 'Auto-identified' },
     roleManual: { zh: '已手动指定', en: 'Manually set' },
     roleUnknownHint: { zh: '无法确定角色，请在下拉框手动选择', en: 'Cannot auto-determine role; please select manually' },
     thRoleCol: { zh: '角色', en: 'Role' },
     compoundInput: { zh: '化合物标识（支持 SMILES / 名称 / CAS / InChI）', en: 'Compound identifier (SMILES / name / CAS / InChI)' },
     compoundInputPh: { zh: '例如：CC(=O)Oc1ccccc1C(=O)O（阿司匹林）；SMILES / 名称 / CAS / InChI 均可，输入自动联想', en: 'e.g. CC(=O)Oc1ccccc1C(=O)O (aspirin); SMILES / name / CAS / InChI; auto-suggest on input' },
-    suggestHint: { zh: '💡 输入时自动联想常用简称 / 通用名 / 官方名：↓↑ 选择，Enter 或 Tab 填入，Esc 关闭', en: '💡 Auto-suggest common abbreviations / generic / official names while typing: ↓↑ select, Enter or Tab to fill, Esc to close' },
+    suggestHint: { zh: '💡 输入时自动联想：↓↑ 选择；联想打开时 Enter/Tab 只选词；单行 Enter 预测；多行 Enter 换行，Ctrl/Cmd+Enter 批量；Esc 关闭', en: '💡 Suggest: ↓↑ select; Enter/Tab picks when open; Enter predicts on single line; Enter newline / Ctrl·Cmd+Enter batch on multi-line; Esc closes' },
     ocrBtn: { zh: '🖼 上传图片识别为 SMILES', en: '🖼 Image → SMILES' },
     predictBtn: { zh: '🔍 预测性质', en: '🔍 Predict' },
     batchBtn: { zh: '📊 批量模式', en: '📊 Batch' },
@@ -3221,7 +3254,8 @@
     items.forEach((it, i) => it.classList.toggle('active', i === activeIndex));
     if (items[activeIndex]) items[activeIndex].scrollIntoView({ block: 'nearest' });
   }
-  function selectCompound(m) {
+  function selectCompound(m, opts) {
+    opts = opts || {};
     const e = m.e;
     els.input.value = replaceLastLine(e.c);
     // 选中的是名称类词条，强制以名称（或自动识别）提交，避免沿用用户此前手动选的 SMILES/CAS 类型导致解析失败
@@ -3230,7 +3264,8 @@
     els.inputType.value = newType;
     hideSuggest();
     els.input.focus();
-    // 单行输入时自动预测；批量（多行）仅填入，避免误触发单条计算
+    // 点击联想可自动预测；键盘 Enter 选词时 opts.predict===false，仅填入不触发预测
+    if (opts.predict === false) return;
     if (els.input.value.indexOf('\n') === -1) runSingle();
   }
   function onSuggestInput() {
@@ -3245,7 +3280,11 @@
     if (e.key === 'ArrowDown') { e.preventDefault(); activeIndex = (activeIndex + 1) % currentMatches.length; updateActive(); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); activeIndex = (activeIndex - 1 + currentMatches.length) % currentMatches.length; updateActive(); }
     else if (e.key === 'Enter' || e.key === 'Tab') {
-      if (currentMatches.length) { e.preventDefault(); selectCompound(currentMatches[activeIndex]); }
+      if (currentMatches.length) {
+        e.preventDefault();
+        if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+        selectCompound(currentMatches[activeIndex], { predict: false });
+      }
     }
     else if (e.key === 'Escape') { hideSuggest(); }
   }
@@ -3526,12 +3565,19 @@
 
     els.predictBtn.addEventListener('click', runSingle);
     els.batchBtn.addEventListener('click', runBatch);
-    // ④ Enter 快捷预测：输入框内 Ctrl/Cmd+Enter = 批量；普通 Enter = 单条预测
+    // ④ Enter：联想打开时只选词（交给 onSuggestKey）；单行 Enter 预测；多行 Enter 换行；Ctrl/Cmd+Enter 批量
     els.input.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter') return;
+      if (suggestOpen) return; // 不 preventDefault，由 onSuggestKey 选词
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        runBatch();
+        return;
+      }
+      const multi = els.input.value.indexOf('\n') !== -1;
+      if (multi) return; // 多行：允许默认换行
       e.preventDefault();
-      if (e.ctrlKey || e.metaKey || e.shiftKey) runBatch();
-      else runSingle();
+      runSingle();
     });
     // ⑤ URL 分享：?s=SMILES 或 ?q=名称 自动载入并预测（分享链接一键重现）
     (function handleShareUrl() {

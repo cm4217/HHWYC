@@ -88,11 +88,11 @@
             <div class="field">
               <label for="role" data-i18n="role">化合物角色</label>
               <select id="role">
+                <option value="unknown" selected data-i18n="roleUnknown">自动</option>
                 <option value="intermediate" data-i18n="roleIntermediate">中间体</option>
                 <option value="api" data-i18n="roleApi">原料药 (API)</option>
                 <option value="impurity" data-i18n="roleImpurity">杂质</option>
                 <option value="reagent" data-i18n="roleReagent">试剂</option>
-                <option value="unknown" data-i18n="roleUnknown">未指定</option>
               </select>
               <div id="roleHint" class="role-hint"></div>
             </div>
@@ -104,7 +104,7 @@
               <textarea id="compoundInput" rows="1" data-i18n-ph="compoundInputPh" placeholder="例如：CC(=O)Oc1ccccc1C(=O)O（阿司匹林）；SMILES / 名称 / CAS / InChI 均可，输入自动联想"></textarea>
               <div id="suggestBox" class="suggest-box hidden"></div>
             </div>
-            <div class="suggest-hint" id="suggestHint" data-i18n="suggestHint">💡 输入时自动联想常用<b>简称</b> / <b>通用名</b> / <b>官方名</b>：↓↑ 选择，Enter 或 Tab 填入，Esc 关闭</div>
+            <div class="suggest-hint" id="suggestHint" data-i18n="suggestHint">💡 输入时自动联想常用<b>简称</b> / <b>通用名</b> / <b>官方名</b>：↓↑ 选择，Enter/Tab 选词；单行 Enter 预测；多行 Enter 换行，Ctrl/Cmd+Enter 批量；Esc 关闭</div>
           </div>
 
           <div class="chips" id="exampleChips"></div>
