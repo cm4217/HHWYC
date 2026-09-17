@@ -1341,6 +1341,90 @@
     Heptane: [15.3, 0.0, 0.0, 0], Cyclohexane: [16.8, 0.0, 0.2, 0]
   };
   const ORG_TARGET = [17.6, 13.5, 9.7]; // 理想（良）溶剂 HSP 目标
+  let _orgSolubMpManual = false;
+
+  function setOrgSolubMpSrc(label) {
+    const el = $('orgSolubMpSrc');
+    if (!el) return;
+    el.textContent = label || '—';
+    el.title = '熔点来源：' + (label || '未知');
+  }
+
+  function resolveExperimentalMp(d) {
+    if (!d) return null;
+    const pc = d.pubchem;
+    if (pc && pc.expMeltingPoint != null && !isNaN(parseFloat(pc.expMeltingPoint))) {
+      return { mp: +parseFloat(pc.expMeltingPoint), source: '实验', detail: 'PubChem 实验熔点' };
+    }
+    const rows = d.pred && d.pred.experimental && d.pred.experimental.rows;
+    if (rows && rows.length) {
+      const row = rows.find(r => r.key === 'melting_exp' && r.experimental != null);
+      if (row) return { mp: +row.experimental, source: '实验', detail: 'ACC11/实验合并表' };
+    }
+    return null;
+  }
+
+  function resolveOrgSolubMp(d, desc, opts) {
+    opts = opts || {};
+    // 用户已手改且未强制刷新时，保留输入框
+    if (!opts.force && _orgSolubMpManual) {
+      const cur = num($('orgSolubMp') && $('orgSolubMp').value);
+      if (cur != null) return { mp: cur, source: '手动', detail: '用户手改' };
+    }
+    const exp = resolveExperimentalMp(d);
+    if (exp) return exp;
+    const HS = window.HspShared;
+    if (HS && typeof HS.estimateMeltingPointC === 'function') {
+      return HS.estimateMeltingPointC(desc || {});
+    }
+    // 兜底：advance 风格粗略外推（℃）
+    const logP = num(desc && desc.CrippenClogP), mw = num(desc && desc.amw);
+    if (logP != null && mw != null) {
+      let mp = 0.8 * mw - 12 * logP + 15 * (num(desc.NumHBD) || 0) + 10 * (num(desc.NumRings) || 0) - 30;
+      mp = Math.max(40, Math.min(350, mp));
+      return { mp: +mp.toFixed(1), source: '估算', detail: '描述符经验外推' };
+    }
+    return { mp: 150, source: '估算', detail: '缺数据，启发式默认 150℃（已注明，非静默 180℃）' };
+  }
+
+  function getSelectedOrgTemps() {
+    const boxes = document.querySelectorAll('input[name="orgSolubT"]:checked');
+    let temps = Array.from(boxes).map(b => +b.value).filter(t => !isNaN(t));
+    if (!temps.length) temps = [25];
+    temps.sort((a, b) => a - b);
+    if (!temps.includes(25)) {
+      // 基线计算仍需 25℃，展示时补上
+      temps = temps.slice();
+    }
+    return temps;
+  }
+
+  function estimateSoluteHsp(desc, d) {
+    // 优先复用当前预测的 advance.hansen（同源 HspShared）
+    if (d && d.advance && d.advance.hansen && d.advance.hansen.dD != null) {
+      const h = d.advance.hansen;
+      return { dD: h.dD, dP: h.dP, dH: h.dH, Ro: h.Ro, fromAdvance: true };
+    }
+    const HS = window.HspShared;
+    if (HS && typeof HS.estimateSolute === 'function') {
+      const s = HS.estimateSolute(desc);
+      if (s) return s;
+    }
+    // 与 HspShared 一致的本地兜底
+    const logP = num(desc.CrippenClogP), tpsa = num(desc.tpsa);
+    const hbd = num(desc.NumHBD) || 0, hba = num(desc.NumHBA) || 0;
+    const dD = +(16.0 + 0.55 * Math.max(0, logP || 0)).toFixed(2);
+    const dP = +(0.04 + 0.12 * (tpsa || 0)).toFixed(2);
+    const dH = +(2.5 + 3.0 * hbd + 1.2 * hba).toFixed(2);
+    return { dD, dP, dH, Ro: +Math.sqrt(dD * dD + dP * dP + dH * dH).toFixed(2) };
+  }
+
+  function orgRa(solute, hspArr) {
+    const HS = window.HspShared;
+    if (HS && typeof HS.ra === 'function') return HS.ra(solute, hspArr);
+    return +Math.sqrt(4 * (solute.dD - hspArr[0]) ** 2 + (solute.dP - hspArr[1]) ** 2 + (solute.dH - hspArr[2]) ** 2).toFixed(2);
+  }
+
   function orgClass(mgml) {
     if (mgml >= 100) return { label: '极易溶', level: 'best' };
     if (mgml >= 30) return { label: '易溶', level: 'good' };
@@ -1349,46 +1433,119 @@
     if (mgml >= 0.1) return { label: '难溶', level: 'poor' };
     return { label: '几乎不溶', level: 'worst' };
   }
+
+  function fmtMgml(v) {
+    if (v == null || !isFinite(v)) return '—';
+    if (v >= 100) return v.toFixed(0);
+    if (v >= 1) return v.toFixed(2);
+    if (v >= 0.01) return v.toFixed(3);
+    return fmtSci(v);
+  }
+
   function orgSolubCalc() {
     const out = $('orgSolubOut'); if (!out) return;
     const sm = ($('orgSolubSmiles') && $('orgSolubSmiles').value.trim()) || currentSmiles();
     if (!sm) { out.innerHTML = '<div class="row-note err">请先输入 SMILES 或完成一次预测。</div>'; return; }
     const cd = getCompoundData(sm);
     if (!cd || !cd.desc) { out.innerHTML = '<div class="row-note err">无法获取该结构的描述符（引擎未就绪或结构无效）。</div>'; return; }
+    const cur = getCurrent();
     const logP = num(cd.desc.CrippenClogP), tpsa = num(cd.desc.tpsa), mw = num(cd.desc.amw);
     const hbd = num(cd.desc.NumHBD) || 0, hba = num(cd.desc.NumHBA) || 0;
+
+    // 熔点：输入框优先；空则自动估算并写明来源（禁止静默 180℃）
     let mp = num($('orgSolubMp') && $('orgSolubMp').value);
-    const mpGiven = mp != null; if (!mpGiven) mp = 180;
+    let mpInfo;
+    if (mp != null && _orgSolubMpManual) {
+      mpInfo = { mp, source: '手动', detail: '用户手改' };
+    } else if (mp != null && !$('orgSolubMp').dataset.autoFilled) {
+      // 有值但非手动标记：可能是上次自动填入
+      const srcText = ($('orgSolubMpSrc') && $('orgSolubMpSrc').textContent) || '';
+      if (srcText.indexOf('手动') >= 0) mpInfo = { mp, source: '手动', detail: '用户手改' };
+      else if (srcText.indexOf('实验') >= 0) mpInfo = { mp, source: '实验', detail: '已填实验值' };
+      else if (srcText.indexOf('估算') >= 0) mpInfo = { mp, source: '估算', detail: '已填估算值' };
+      else mpInfo = { mp, source: srcText || '已填', detail: '输入框现值' };
+    } else {
+      mpInfo = resolveOrgSolubMp(cur && cur.smiles === sm ? cur : null, cd.desc, { force: true });
+      mp = mpInfo.mp;
+      if ($('orgSolubMp')) {
+        $('orgSolubMp').value = mp;
+        $('orgSolubMp').dataset.autoFilled = '1';
+      }
+      _orgSolubMpManual = false;
+      setOrgSolubMpSrc(mpInfo.source);
+    }
+    if ($('orgSolubMw') && mw != null) $('orgSolubMw').value = mw.toFixed(1);
+
     const dLogP = (logP != null ? logP : 5.2) - 5.2;
     const dTpsa = (tpsa != null ? tpsa : 63) - 63;
     const dMp = mp - 180;
-    // 溶质 HSP 估计（仅作参考展示）
-    const dDs = 16.0 + 0.3 * (logP != null ? logP : 0);
-    const dPs = 0.04 + 0.12 * (tpsa != null ? tpsa : 0);
-    const dHs = 3.0 + 4.0 * hbd + 1.5 * hba;
+    const solute = estimateSoluteHsp(cd.desc, cur && cur.smiles === sm ? cur : null);
+    const dDs = solute.dD, dPs = solute.dP, dHs = solute.dH;
     const grp = detectGroupsForTool(sm);
+    const temps = getSelectedOrgTemps();
+    const displayTemps = temps.slice();
+    if (!displayTemps.includes(25)) displayTemps.push(25);
+    displayTemps.sort((a, b) => a - b);
+
+    const HS = window.HspShared;
     const rows = ORG_SOLVENTS.map(([key, label]) => {
-      const pred = ORG_ANCHOR[key] + 0.30 * dLogP - 0.004 * dTpsa - 0.01 * dMp;
-      const mgml = Math.pow(10, pred);
+      const pred25 = ORG_ANCHOR[key] + 0.30 * dLogP - 0.004 * dTpsa - 0.01 * dMp;
+      const mgml25 = Math.pow(10, pred25);
       const hsp = ORG_HSP[key];
-      const red = Math.sqrt(4 * (dDs - hsp[0]) ** 2 + (dPs - hsp[1]) ** 2 + (dHs - hsp[2]) ** 2);
-      return { key, label, mgml, cls: orgClass(mgml), red };
+      const red = orgRa({ dD: dDs, dP: dPs, dH: dHs }, hsp);
+      const B = (HS && HS.vantHoffB) ? HS.vantHoffB(hsp) : Math.min(1500, Math.max(500, 500 + 28 * (hsp[1] + hsp[2])));
+      const byT = {};
+      displayTemps.forEach(t => {
+        if (t === 25) byT[t] = mgml25;
+        else if (HS && HS.solubilityAtT) byT[t] = HS.solubilityAtT(mgml25, t, B);
+        else {
+          const logS = Math.log10(Math.max(mgml25, 1e-12)) + B * (1 / 298.15 - 1 / (t + 273.15));
+          byT[t] = Math.pow(10, logS);
+        }
+      });
+      const mgml = byT[25] != null ? byT[25] : mgml25;
+      return { key, label, mgml, mgml25, byT, B, cls: orgClass(mgml), red, hsp };
     });
-    const good = rows.filter(r => r.mgml >= 30).sort((a, b) => b.mgml - a.mgml);
-    const anti = rows.filter(r => r.mgml < 1).sort((a, b) => a.mgml - b.mgml);
-    const best = good[0], worst = anti[0];
-    let html = `<div class="row-note">化合物 logP≈<b>${logP != null ? logP.toFixed(2) : '—'}</b>、TPSA≈<b>${tpsa != null ? tpsa.toFixed(0) : '—'}</b>、MW≈<b>${mw != null ? mw.toFixed(1) : '—'}</b>；${mpGiven ? '熔点 ' + mp + '℃' : '熔点未填，按 180℃ 估算'}。基线已校准至文献异噁唑啉羧酸中间体，其余化合物按亲脂性(+0.30·ΔlogP)、极性(−0.004·ΔTPSA)、熔点(−0.01·ΔMP) 外推。</div>`;
-    html += '<table class="tool-table"><thead><tr><th>溶剂</th><th>预测溶解度 (mg/mL)</th><th>等级</th><th>工艺角色建议</th></tr></thead><tbody>';
+
+    const good = rows.filter(r => r.mgml25 >= 30).sort((a, b) => b.mgml25 - a.mgml25);
+    const anti = rows.filter(r => r.mgml25 < 1).sort((a, b) => a.mgml25 - b.mgml25);
+    const lowRa = rows.slice().sort((a, b) => a.red - b.red);
+    // 重结晶：高溶 ∩ 低 Ra
+    const recrystall = rows.slice().sort((a, b) => {
+      const scoreA = Math.log10(Math.max(a.mgml25, 1e-6)) - 0.15 * a.red;
+      const scoreB = Math.log10(Math.max(b.mgml25, 1e-6)) - 0.15 * b.red;
+      return scoreB - scoreA;
+    });
+    const best = recrystall[0] || good[0];
+    const worst = anti[0] || lowRa[lowRa.length - 1];
+
+    let html = `<div class="row-note">化合物 logP≈<b>${logP != null ? logP.toFixed(2) : '—'}</b>、TPSA≈<b>${tpsa != null ? tpsa.toFixed(0) : '—'}</b>、MW≈<b>${mw != null ? mw.toFixed(1) : '—'}</b>；熔点 <b>${mp}</b>℃（来源：<b>${escapeHtml(mpInfo.source)}</b>${mpInfo.detail ? '，' + escapeHtml(mpInfo.detail) : ''}）。25℃ 基线已校准至文献异噁唑啉羧酸中间体，其余按亲脂性(+0.30·ΔlogP)、极性(−0.004·ΔTPSA)、熔点(−0.01·ΔMP) 外推；其它温度用简化 van’t Hoff <b>估算</b>。</div>`;
+    html += `<div class="row-note">溶质 HSP（共享 <code>HspShared</code>${solute.fromAdvance ? '，与当前 Hansen 卡一致' : ''}）：δD=<b>${dDs}</b>、δP=<b>${dPs}</b>、δH=<b>${dHs}</b> MPa½；Ra = √(4ΔδD²+ΔδP²+ΔδH²)。<a href="#adv-hansen-card" id="orgSolubLinkHansen">在 Hansen 模块查看 →</a></div>`;
+
+    html += '<table class="tool-table"><thead><tr><th>溶剂</th>';
+    displayTemps.forEach(t => { html += `<th>${t}℃ mg/mL<br><span style="font-weight:400;font-size:11px;color:#888">估算</span></th>`; });
+    html += '<th>等级(25℃)</th><th>Ra</th><th>工艺角色</th></tr></thead><tbody>';
     rows.forEach(r => {
       const role = r.cls.level === 'best' || r.cls.level === 'good' ? '良溶剂（重结晶/萃取）'
         : r.cls.level === 'ok' ? '可用溶剂' : r.cls.level === 'low' ? '弱溶剂/反溶剂候选' : '反溶剂';
-      html += `<tr><td>${escapeHtml(r.label)}</td><td><b>${r.mgml >= 100 ? r.mgml.toFixed(0) : r.mgml.toFixed(2)}</b></td><td>${r.cls.label}</td><td>${role}</td></tr>`;
+      html += `<tr><td>${escapeHtml(r.label)}</td>`;
+      displayTemps.forEach(t => { html += `<td><b>${fmtMgml(r.byT[t])}</b></td>`; });
+      html += `<td>${r.cls.label}</td><td>${r.red}</td><td>${role}</td></tr>`;
     });
     html += '</tbody></table>';
+    html += '<div class="row-note">表注：非 25℃ 列为 van’t Hoff 启发式估算（B≈500–1500 K，按溶剂极性），<b>非实验值</b>。</div>';
+
     if (best && worst) {
-      html += `<div class="row-note"><b>推荐重结晶体系：</b>良溶剂 <b>${escapeHtml(best.label)}</b>（≈${best.mgml >= 100 ? best.mgml.toFixed(0) : best.mgml.toFixed(1)} mg/mL）＋ 反溶剂 <b>${escapeHtml(worst.label)}</b>（≈${worst.mgml.toFixed(2)} mg/mL）。文献常用组合：EA/庚烷、甲苯/庚烷、IPA/水、丙酮/水、乙腈。</div>`;
+      const lowRaGood = lowRa.filter(r => r.mgml25 >= 10).slice(0, 3);
+      html += `<div class="row-note"><b>推荐重结晶体系（溶解度 ∩ Hansen）：</b>良溶剂优先 <b>${escapeHtml(best.label)}</b>`
+        + `（25℃≈${fmtMgml(best.mgml25)} mg/mL，Ra=${best.red}）＋ 反溶剂 <b>${escapeHtml(worst.label)}</b>`
+        + `（≈${fmtMgml(worst.mgml25)} mg/mL，Ra=${worst.red}）。`;
+      if (lowRaGood.length) {
+        html += ' 低 Ra 且可溶溶剂：' + lowRaGood.map(r => escapeHtml(r.label) + '(Ra=' + r.red + ')').join('、') + '。';
+      }
+      html += ' 文献常用组合：EA/庚烷、甲苯/庚烷、IPA/水、丙酮/水、乙腈。</div>';
     }
-    // 工艺与配液注意
+
     const notes = [];
     if (grp.cooh > 0) notes.push('含<b>羧基（−COOH）</b>：在极性非质子溶剂中常以二聚体存在，利于在非极性溶剂中增溶；后处理可用「碱洗 → 酸析」调控游离酸/盐型析出；成盐（Na⁺/K⁺/葡甲胺/氨丁三醇）可显著改善水溶性。');
     if (grp.ester > 0) notes.push('含<b>酯键</b>：留意醇类溶剂（MeOH/EtOH/IPA）中酸催化下的转酯/水解风险，结晶/打浆优先选非质子溶剂。');
@@ -1397,15 +1554,37 @@
     if (logP != null && logP > 4) notes.push('<b>高亲脂</b>：DMSO/DMF 等作生物活性测试储备液（≥0.5% DMSO），可加 0.1% BSA 或 0.01–0.05% Tween-80 增溶；改善水溶性可考虑固体分散体（HPMC-AS/PVP-VA64）、脂质/表面活性剂。');
     notes.push('干燥：50–60℃ 真空干燥。');
     html += '<div class="module-summary" style="margin-top:8px"><span class="k">工艺/配液注意</span>' + notes.map(n => '• ' + n).join('<br>') + '</div>';
-    html += `<div class="row-note">参考（Hansen 框架）：溶质估计 HSP (δD,δP,δH)=(${dDs.toFixed(1)}, ${dPs.toFixed(1)}, ${dHs.toFixed(1)}) MPa^0.5；理想溶剂目标 (${ORG_TARGET.join(', ')})；表中 RED 为与目标的 Hansen 距离（越小越接近良溶剂）。本预测为前端启发式估算，非实验值。</div>`;
+    html += `<div class="row-note">参考：理想溶剂目标 HSP (${ORG_TARGET.join(', ')})；${(window.HspShared && window.HspShared.classicRaNote) || '经典 Ra'}。本预测为前端启发式估算，非实验值。</div>`;
     out.innerHTML = html;
+
+    const link = $('orgSolubLinkHansen');
+    if (link) {
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        const card = $('adv-hansen-card');
+        if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
   }
+
   function orgSolubUseCurrent() {
     const d = getCurrent(); if (!d || !d.smiles) { setStatusNote('请先完成一次预测。'); return; }
     if ($('orgSolubSmiles')) $('orgSolubSmiles').value = d.smiles;
     const mw = d.rdkit && d.rdkit.desc && d.rdkit.desc.amw;
     if ($('orgSolubMw') && mw) $('orgSolubMw').value = (+mw).toFixed(1);
+    _orgSolubMpManual = false;
+    const mpInfo = resolveOrgSolubMp(d, d.rdkit && d.rdkit.desc, { force: true });
+    if ($('orgSolubMp')) {
+      $('orgSolubMp').value = mpInfo.mp;
+      $('orgSolubMp').dataset.autoFilled = '1';
+    }
+    setOrgSolubMpSrc(mpInfo.source);
     orgSolubCalc();
+  }
+
+  function orgSolubGotoHansen() {
+    const card = $('adv-hansen-card');
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   /* ============ ⑳ GSE pH–溶解度曲线 ============ */
@@ -1908,6 +2087,15 @@
     // ⑲ 有机溶剂溶解度
     const osBtn = $('orgSolubCalc'); if (osBtn) osBtn.addEventListener('click', orgSolubCalc);
     const osUse = $('orgSolubUseCurrent'); if (osUse) osUse.addEventListener('click', orgSolubUseCurrent);
+    const osHans = $('orgSolubGotoHansen'); if (osHans) osHans.addEventListener('click', orgSolubGotoHansen);
+    const osMp = $('orgSolubMp');
+    if (osMp) {
+      osMp.addEventListener('input', () => {
+        _orgSolubMpManual = true;
+        delete osMp.dataset.autoFilled;
+        setOrgSolubMpSrc('手动');
+      });
+    }
     // ⑳ GSE pH–溶解度曲线
     const gpBtn = $('gsePhCalc'); if (gpBtn) gpBtn.addEventListener('click', gsePhCalc);
     const gpUse = $('gsePhUseCurrent'); if (gpUse) gpUse.addEventListener('click', gsePhUseCurrent);
@@ -2014,4 +2202,6 @@
 
   // 暴露 OCR 识别函数供主流程（app.js）复用
   window.ocrViaMolScribe = ocrViaMolScribe;
+  // 有机溶剂溶解度：供 Hansen 卡交叉跳转调用
+  window.OrgSolub = { calc: orgSolubCalc, useCurrent: orgSolubUseCurrent, gotoHansen: orgSolubGotoHansen };
 })();

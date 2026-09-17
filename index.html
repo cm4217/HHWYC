@@ -353,8 +353,8 @@
 
       <!-- Hansen 溶解度参数（新增） -->
       <section class="card" id="adv-hansen-card">
-        <div class="card-title"><span data-i18n="ctAdvHansen">Hansen 溶解度参数（三维）</span> <span class="badge badge-src-rd">相关性估计</span></div>
-        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>给出 <b>δD/δP/δH</b> 三维溶解度参数与 Ro，并列出与常见溶剂的 Hansen 距离 Ra（升序＝越可能良溶），辅助<b>结晶良/反溶剂配对</b>与萃取体系设计。δ 值为相关性经验估计，但 Ra 排序具趋势参考价值。</div>
+        <div class="card-title"><span data-i18n="ctAdvHansen">Hansen 溶解度参数（三维）</span> <span class="badge badge-src-rd">相关性估计 · 共享 HSP</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>给出 <b>δD/δP/δH</b> 三维溶解度参数与 Ro，并列出与常见溶剂的 Hansen 距离 Ra（经典式 √(4ΔδD²+ΔδP²+ΔδH²)，升序＝越可能良溶）。溶质 HSP 与「有机溶剂溶解度」模块共用 <code>HspShared</code>，可交叉跳转。δ 值为相关性经验估计，Ra 排序具趋势参考价值。</div>
         <div id="advHansen"></div>
       </section>
 
@@ -409,16 +409,30 @@
 
       <!-- 有机溶剂溶解度预测（结果卡） -->
       <section class="card" id="orgSolub-card">
-        <div class="card-title"><span data-i18n="ctOrgSolub">有机溶剂溶解度预测（文献基线校准 + 亲脂性/极性/熔点外推）</span> <span class="badge badge-src-rd">RDKit + 文献校准</span></div>
-        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>基于文献《溶解度预测报告》中异噁唑啉羧酸中间体的有机溶剂溶解度基线，按<b>亲脂性（logP，+0.30·ΔlogP）、极性（TPSA，−0.004·ΔTPSA）、熔点（−0.01·ΔMP）</b>外推 17 种常用溶剂的溶解度（mg/mL），并给出<b>重结晶体系建议</b>（良溶剂＋反溶剂）与工艺/配液注意。可用于结晶、萃取、生物测试配液溶性评估。预测后将自动带入当前化合物。</div>
+        <div class="card-title"><span data-i18n="ctOrgSolub">有机溶剂溶解度预测（文献基线校准 + 亲脂性/极性/熔点外推 · 多温度估算）</span> <span class="badge badge-src-rd">RDKit + 文献校准</span></div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>基于文献《溶解度预测报告》中异噁唑啉羧酸中间体的有机溶剂溶解度基线，按<b>亲脂性（logP，+0.30·ΔlogP）、极性（TPSA，−0.004·ΔTPSA）、熔点（−0.01·ΔMP）</b>外推 17 种常用溶剂在 <b>25℃ 基线</b>的溶解度（mg/mL），再用简化 van’t Hoff 估算其它温度；溶质 HSP 与 Hansen 三维模块共用 <code>HspShared</code>。给出<b>重结晶体系建议</b>（低 Ra 良溶剂 ∩ 高溶溶剂）与工艺/配液注意。数值均为估算，非实验值。</div>
         <div class="tool-body">
           <label style="display:block">SMILES<textarea class="tool-area-sm" id="orgSolubSmiles" placeholder="如 CC(=O)Oc1ccccc1C(=O)O"></textarea></label>
           <div class="tool-grid">
-            <label>熔点 MP (℃)<input class="tool-input" id="orgSolubMp" type="number" placeholder="如 180"></label>
+            <label>熔点 MP (℃)
+              <span style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap">
+                <input class="tool-input" id="orgSolubMp" type="number" placeholder="实验优先；缺则自动估算" style="width:9em">
+                <span id="orgSolubMpSrc" class="badge badge-src-rd" title="熔点来源">—</span>
+              </span>
+            </label>
             <label>分子量 MW (自动)<input class="tool-input" id="orgSolubMw" type="number" placeholder="用当前化合物时自动填充" readonly></label>
           </div>
+          <div class="tool-temps" id="orgSolubTemps" style="margin:8px 0;display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px">
+            <span style="font-size:13px;color:#5b6776">温度 (℃，可多选；相对 25℃ van’t Hoff <b>估算</b>)：</span>
+            <label style="font-size:13px"><input type="checkbox" name="orgSolubT" value="5"> 5</label>
+            <label style="font-size:13px"><input type="checkbox" name="orgSolubT" value="15"> 15</label>
+            <label style="font-size:13px"><input type="checkbox" name="orgSolubT" value="25" checked> 25</label>
+            <label style="font-size:13px"><input type="checkbox" name="orgSolubT" value="40" checked> 40</label>
+            <label style="font-size:13px"><input type="checkbox" name="orgSolubT" value="60"> 60</label>
+          </div>
           <div class="action-row"><button class="btn btn-sm btn-secondary" id="orgSolubCalc" type="button">预测有机溶剂溶解度</button>
-            <button class="btn btn-sm btn-ghost" id="orgSolubUseCurrent" type="button">用当前化合物</button></div>
+            <button class="btn btn-sm btn-ghost" id="orgSolubUseCurrent" type="button">用当前化合物</button>
+            <button class="btn btn-sm btn-ghost" id="orgSolubGotoHansen" type="button">在 Hansen 模块查看</button></div>
           <div id="orgSolubOut"></div>
         </div>
       </section>
@@ -835,6 +849,7 @@
   <script defer src="assets/compound-dict.js"></script>
   <script defer src="assets/vendor/xlsx.full.min.js"></script>
   <script defer src="assets/vendor/jszip.min.js"></script>
+  <script defer src="assets/hsp-shared.js"></script>
   <script defer src="assets/research-tools.js"></script>
   <script defer src="assets/advance.js"></script>
   <script defer src="assets/app.js"></script>

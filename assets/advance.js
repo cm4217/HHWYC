@@ -197,15 +197,23 @@ window.Advance = (function () {
    * ------------------------------------------------------------------------- */
   function computeHansen(d) {
     const desc = d.rdkit && d.rdkit.desc || {};
-    const logP = num(desc.CrippenClogP), tpsa = num(desc.tpsa),
-      hbd = num(desc.NumHBD) || 0, hba = num(desc.NumHBA) || 0, mw = num(desc.amw);
+    const logP = num(desc.CrippenClogP), tpsa = num(desc.tpsa), mw = num(desc.amw);
     if (logP == null || tpsa == null || mw == null) return null;
-    // 相关性经验估计（非基团贡献法，仅趋势参考）
-    const dD = +(16 + 1.4 * Math.max(0, logP)).toFixed(2);            // 色散：随疏水性升高
-    const dP = +(0.12 * tpsa).toFixed(2);                             // 极性：随 TPSA 升高
-    const dH = +(2.0 + 1.4 * (hbd + hba)).toFixed(2);                // 氢键：随 H 键位点升高
-    const Ro = +Math.sqrt(dD * dD + dP * dP + dH * dH).toFixed(2);
-    // 常见溶剂 HSP（近似值），用 Ra 距离判断相容性
+    // 与有机溶剂溶解度模块共用 HspShared.estimateSolute，避免两套溶质 HSP 不一致
+    let dD, dP, dH, Ro, sharedNote;
+    const HS = window.HspShared;
+    if (HS && typeof HS.estimateSolute === 'function') {
+      const s = HS.estimateSolute(desc);
+      if (!s) return null;
+      dD = s.dD; dP = s.dP; dH = s.dH; Ro = s.Ro; sharedNote = s.note;
+    } else {
+      const hbd = num(desc.NumHBD) || 0, hba = num(desc.NumHBA) || 0;
+      dD = +(16.0 + 0.55 * Math.max(0, logP)).toFixed(2);
+      dP = +(0.04 + 0.12 * tpsa).toFixed(2);
+      dH = +(2.5 + 3.0 * hbd + 1.2 * hba).toFixed(2);
+      Ro = +Math.sqrt(dD * dD + dP * dP + dH * dH).toFixed(2);
+      sharedNote = 'δD/δP/δH 为相关性经验估计（HspShared 未加载时的本地兜底）。';
+    }
     const solvents = [
       { n: '水', dD: 15.5, dP: 16.0, dH: 42.3 }, { n: '甲醇', dD: 14.7, dP: 12.3, dH: 22.3 },
       { n: '乙醇', dD: 15.8, dP: 8.8, dH: 19.4 }, { n: '异丙醇', dD: 15.8, dP: 6.1, dH: 16.4 },
@@ -215,14 +223,21 @@ window.Advance = (function () {
       { n: 'THF', dD: 16.8, dP: 5.7, dH: 8.0 }, { n: '甲苯', dD: 18.0, dP: 1.4, dH: 2.0 },
       { n: '正庚烷', dD: 15.3, dP: 0.0, dH: 0.0 }, { n: '乙酸', dD: 14.5, dP: 8.0, dH: 13.5 },
     ];
+    const solute = { dD, dP, dH };
     const rows = solvents.map(s => {
-      const ra = Math.sqrt((s.dD - dD) ** 2 + 0.25 * (s.dP - dP) ** 2 + (s.dH - dH) ** 2);
-      return { n: s.n, ra: +ra.toFixed(2), good: ra < 8 };
+      let raVal;
+      if (HS && typeof HS.ra === 'function') raVal = HS.ra(solute, s);
+      else raVal = +Math.sqrt(4 * (s.dD - dD) ** 2 + (s.dP - dP) ** 2 + (s.dH - dH) ** 2).toFixed(2);
+      return { n: s.n, ra: raVal, good: raVal < 8 };
     }).sort((a, b) => a.ra - b.ra);
     const goodMap = {};
     rows.forEach(r => goodMap[r.n] = r.good);
     solvents.forEach(s => s.good = goodMap[s.n]);
-    return { dD, dP, dH, Ro, solvents, rows, note: 'δD/δP/δH 为「相关性经验估计」（由 logP/TPSA/H 键位点映射），非基团贡献法精确值；但相对 Ra 排序（与常见溶剂的 Hansen 距离）对良溶剂筛选具备趋势参考价值。Ra<8 通常预示良好相容性。' };
+    const raNote = (HS && HS.classicRaNote) || 'Ra = √(4ΔδD² + ΔδP² + ΔδH²)；Ra<8 通常预示良好相容性。';
+    return {
+      dD, dP, dH, Ro, solvents, rows,
+      note: (sharedNote || '') + ' ' + raNote + ' 与「有机溶剂溶解度」模块共用同一套溶质 HSP。'
+    };
   }
 
   /* ---------------------------------------------------------------------------
@@ -667,7 +682,20 @@ window.Advance = (function () {
     html += '<div class="sub-title" style="margin:12px 0 2px">Hansen 三维溶解度球体（等距投影）</div>';
     html += svgHansenSphere(h);
     html += `<div class="row-note" style="margin-top:8px">${esc(h.note)}</div>`;
+    html += '<div class="action-row" style="margin-top:10px">'
+      + '<button class="btn btn-sm btn-secondary" type="button" id="hansenGotoOrgSolub">用到有机溶剂溶解度</button>'
+      + '<span class="row-note" style="margin-left:8px">带入当前化合物，交叉查看多温度有机溶剂溶解度表</span></div>';
     set('advHansen', html);
+    const btn = document.getElementById('hansenGotoOrgSolub');
+    if (btn) {
+      btn.addEventListener('click', () => {
+        const card = document.getElementById('orgSolub-card');
+        if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (window.OrgSolub && typeof window.OrgSolub.useCurrent === 'function') {
+          window.OrgSolub.useCurrent();
+        }
+      });
+    }
   }
 
   function renderSpeciation(a) {
