@@ -402,7 +402,7 @@
         <span id="adv-hansen-card" class="suite-legacy-anchor" data-suite-tab="hansen" aria-hidden="true"></span>
         <span id="adv-tempsol-card" class="suite-legacy-anchor" data-suite-tab="tempsol" aria-hidden="true"></span>
         <div class="card-title"><span data-i18n="ctSolventSuite">溶剂体系与溶解度（Hansen · 有机溶剂 · 重结晶）</span> <span class="badge badge-src-rd">统一模块 · 共享 HSP</span></div>
-        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>一张卡覆盖三类溶剂相关分析：<b>有机溶剂溶解度</b>（文献基线外推 + 多温度）、<b>Hansen 三维</b>（δD/δP/δH 与 Ra）、<b>温度/重结晶相图</b>（van’t Hoff）。顶部 SMILES/熔点各 tab 共用；溶质 HSP 走 <code>HspShared</code>。数值均为估算，非实验值。</div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>一次计算覆盖三类分析：<b>有机溶剂溶解度</b>、<b>Hansen 三维</b>、<b>温度/重结晶相图</b>。顶部共享 SMILES/熔点/温度；三 tab 读同一结果；溶质 HSP 走 <code>HspShared</code>。数值均为估算，非实验值。</div>
 
         <div class="tool-body suite-shared">
           <label style="display:block">SMILES<textarea class="tool-area-sm" id="orgSolubSmiles" placeholder="如 CC(=O)Oc1ccccc1C(=O)O"></textarea></label>
@@ -415,8 +415,17 @@
             </label>
             <label>分子量 MW (自动)<input class="tool-input" id="orgSolubMw" type="number" placeholder="用当前化合物时自动填充" readonly></label>
           </div>
+          <div class="tool-temps" id="orgSolubTemps" style="margin:8px 0;display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px">
+            <span style="font-size:13px;color:#5b6776">温度 (℃，可多选；相对 25℃ van’t Hoff <b>估算</b>)：</span>
+            <label style="font-size:13px"><input type="checkbox" name="orgSolubT" value="5"> 5</label>
+            <label style="font-size:13px"><input type="checkbox" name="orgSolubT" value="15"> 15</label>
+            <label style="font-size:13px"><input type="checkbox" name="orgSolubT" value="25" checked> 25</label>
+            <label style="font-size:13px"><input type="checkbox" name="orgSolubT" value="40" checked> 40</label>
+            <label style="font-size:13px"><input type="checkbox" name="orgSolubT" value="60"> 60</label>
+          </div>
           <div class="action-row">
             <button class="btn btn-sm btn-ghost" id="orgSolubUseCurrent" type="button">用当前化合物</button>
+            <button class="btn btn-sm btn-secondary" id="orgSolubCalc" type="button">计算溶剂体系</button>
           </div>
         </div>
 
@@ -428,29 +437,17 @@
           </div>
 
           <div class="suite-tab-panel active" data-suite-panel="orgsolub" role="tabpanel">
-            <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>基于文献《溶解度预测报告》中异噁唑啉羧酸中间体的有机溶剂溶解度基线，按<b>亲脂性（logP，+0.30·ΔlogP）、极性（TPSA，−0.004·ΔTPSA）、熔点（−0.01·ΔMP）</b>外推 17 种常用溶剂在 <b>25℃ 基线</b>的溶解度（mg/mL），再用简化 van’t Hoff 估算其它温度。给出<b>重结晶体系建议</b>（低 Ra 良溶剂 ∩ 高溶溶剂）与工艺/配液注意。</div>
-            <div class="tool-temps" id="orgSolubTemps" style="margin:8px 0;display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px">
-              <span style="font-size:13px;color:#5b6776">温度 (℃，可多选；相对 25℃ van’t Hoff <b>估算</b>)：</span>
-              <label style="font-size:13px"><input type="checkbox" name="orgSolubT" value="5"> 5</label>
-              <label style="font-size:13px"><input type="checkbox" name="orgSolubT" value="15"> 15</label>
-              <label style="font-size:13px"><input type="checkbox" name="orgSolubT" value="25" checked> 25</label>
-              <label style="font-size:13px"><input type="checkbox" name="orgSolubT" value="40" checked> 40</label>
-              <label style="font-size:13px"><input type="checkbox" name="orgSolubT" value="60"> 60</label>
-            </div>
-            <div class="action-row">
-              <button class="btn btn-sm btn-secondary" id="orgSolubCalc" type="button">预测有机溶剂溶解度</button>
-              <button class="btn btn-sm btn-ghost" id="orgSolubGotoHansen" type="button">在 Hansen 模块查看</button>
-            </div>
+            <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>17 种溶剂多温度溶解度表（文献基线外推 + van’t Hoff）与重结晶建议；与 Hansen 共用 HSP。</div>
             <div id="orgSolubOut"></div>
           </div>
 
           <div class="suite-tab-panel" data-suite-panel="hansen" role="tabpanel">
-            <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>给出 <b>δD/δP/δH</b> 三维溶解度参数与 Ro，并列出与常见溶剂的 Hansen 距离 Ra（经典式 √(4ΔδD²+ΔδP²+ΔδH²)，升序＝越可能良溶）。溶质 HSP 与有机溶剂 tab 共用 <code>HspShared</code>。δ 值为相关性经验估计，Ra 排序具趋势参考价值。</div>
+            <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>溶质 δD/δP/δH、Ra 表与三维投影；溶剂 HSP 与有机溶表共用。</div>
             <div id="advHansen"></div>
           </div>
 
           <div class="suite-tab-panel" data-suite-panel="tempsol" role="tabpanel">
-            <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>基于 ΔH_solv 用 <b>van't Hoff 方程</b>外推不同温度下的固有溶解度，判断「热溶-冷却析晶」驱动力（ΔH>0 吸热溶解、升温显著增溶更适合冷却结晶；反之宜用反溶剂/蒸发析晶）。</div>
+            <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span>引用同一套温度与溶解度结果，展示 van’t Hoff 相图与结晶驱动力建议。</div>
             <div id="advTempSol"></div>
           </div>
         </div>

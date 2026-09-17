@@ -236,7 +236,7 @@ window.Advance = (function () {
     const raNote = (HS && HS.classicRaNote) || 'Ra = √(4ΔδD² + ΔδP² + ΔδH²)；Ra<8 通常预示良好相容性。';
     return {
       dD, dP, dH, Ro, solvents, rows,
-      note: (sharedNote || '') + ' ' + raNote + ' 与「有机溶剂溶解度」模块共用同一套溶质 HSP。'
+      note: (sharedNote || '') + ' ' + raNote
     };
   }
 
@@ -675,32 +675,15 @@ window.Advance = (function () {
       + `<div class="score-box"><div class="s-label">Ro 总参数</div><div class="s-val">${h.Ro}</div><div style="font-size:11px;color:#5b6776">MPa^½</div></div></div>`;
     html += '<div class="sub-title" style="margin:10px 0 4px">与常见溶剂的 Hansen 距离 Ra（升序＝越可能良溶）</div>';
     html += '<table class="data"><thead><tr><th>溶剂</th><th>Ra</th><th>相容性</th></tr></thead><tbody>';
-    h.rows.slice(0, 8).forEach(r => {
+    h.rows.slice(0, 17).forEach(r => {
       html += `<tr><td>${esc(r.n)}</td><td>${r.ra}</td><td><span class="badge badge-${r.good ? 'ok' : 'warn'}">${r.good ? '良溶剂候选' : '一般'}</span></td></tr>`;
     });
     html += '</tbody></table>';
     html += '<div class="sub-title" style="margin:12px 0 2px">Hansen 三维溶解度球体（等距投影）</div>';
     html += svgHansenSphere(h);
+    // 方法说明已在统一卡顶部；此处仅短注，不放跨 tab 跳转按钮
     html += `<div class="row-note" style="margin-top:8px">${esc(h.note)}</div>`;
-    html += '<div class="action-row" style="margin-top:10px">'
-      + '<button class="btn btn-sm btn-secondary" type="button" id="hansenGotoOrgSolub">用到有机溶剂溶解度</button>'
-      + '<span class="row-note" style="margin-left:8px">带入当前化合物，交叉查看多温度有机溶剂溶解度表</span></div>';
     set('advHansen', html);
-    const btn = document.getElementById('hansenGotoOrgSolub');
-    if (btn) {
-      btn.addEventListener('click', () => {
-        if (window.SolventSuite && typeof window.SolventSuite.showTab === 'function') {
-          window.SolventSuite.showTab('orgsolub', { scroll: true });
-        } else {
-          const card = document.getElementById('solvent-suite-card') || document.getElementById('orgSolub-card');
-          if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-        try { history.replaceState(null, '', '#orgSolub-card'); } catch (_) {}
-        if (window.OrgSolub && typeof window.OrgSolub.useCurrent === 'function') {
-          window.OrgSolub.useCurrent();
-        }
-      });
-    }
   }
 
   function renderSpeciation(a) {
@@ -970,13 +953,17 @@ window.Advance = (function () {
   function renderAll(data) {
     if (!data || !data.advance) return;
     const a = data.advance;
+    const suiteOwns = !!document.getElementById('solvent-suite-card');
     renderConfidence(a, data);
     renderEsol(a);
     renderICHM7(a);
     renderSalt(a);
-    renderHansen(a);
+    // Hansen / 温度相图改由溶剂体系统一模块一次计算渲染（避免与共享结果打架）
+    if (!suiteOwns) {
+      renderHansen(a);
+      renderTempSol(a);
+    }
     renderSpeciation(a);
-    renderTempSol(a);
     renderGreen(a);
     renderExcipient(a);
     renderRetro(a);
@@ -985,5 +972,5 @@ window.Advance = (function () {
     renderSolDist(a);
   }
 
-  return { compute, renderAll };
+  return { compute, renderAll, renderHansen, renderTempSol, svgHansenSphere };
 })();
