@@ -689,8 +689,13 @@ window.Advance = (function () {
     const btn = document.getElementById('hansenGotoOrgSolub');
     if (btn) {
       btn.addEventListener('click', () => {
-        const card = document.getElementById('orgSolub-card');
-        if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (window.SolventSuite && typeof window.SolventSuite.showTab === 'function') {
+          window.SolventSuite.showTab('orgsolub', { scroll: true });
+        } else {
+          const card = document.getElementById('solvent-suite-card') || document.getElementById('orgSolub-card');
+          if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        try { history.replaceState(null, '', '#orgSolub-card'); } catch (_) {}
         if (window.OrgSolub && typeof window.OrgSolub.useCurrent === 'function') {
           window.OrgSolub.useCurrent();
         }

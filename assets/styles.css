@@ -197,6 +197,30 @@ textarea:focus, select:focus, input[type="text"]:focus {
 .input-tab-panel { display: none; }
 .input-tab-panel.active { display: block; animation: fadeIn .18s ease; }
 
+/* 溶剂体系统一模块 Tab */
+.suite-legacy-anchor {
+  position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none;
+}
+#solvent-suite-card { position: relative; }
+.suite-shared { margin-bottom: 10px; }
+.suite-tabs { display: flex; flex-direction: column; gap: 12px; }
+.suite-tab-btns {
+  display: inline-flex; flex-wrap: wrap; background: var(--subtle);
+  border: 1px solid var(--line); border-radius: 10px; padding: 4px; gap: 4px;
+}
+.suite-tab-btn {
+  border: none; background: transparent; color: var(--ink-soft); font-size: 13px; font-weight: 600;
+  padding: 7px 14px; border-radius: 8px; cursor: pointer; transition: .15s; font-family: inherit;
+}
+.suite-tab-btn:hover { color: var(--ink); background: rgba(15,23,42,.04); }
+.suite-tab-btn.active { background: var(--panel); color: var(--brand); box-shadow: 0 1px 2px rgba(15,23,42,.08); }
+.suite-tab-panel { display: none; }
+.suite-tab-panel.active { display: block; animation: fadeIn .18s ease; }
+html.dark .suite-tab-btns { background: var(--subtle); border-color: var(--border); }
+html.dark .suite-tab-btn { color: var(--muted); }
+html.dark .suite-tab-btn:hover { color: var(--text); background: rgba(255,255,255,.05); }
+html.dark .suite-tab-btn.active { background: var(--card2); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+
 /* 绿色/安全双仪表盘对齐（渲染卡内） */
 .gauge-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; max-width: 540px; margin: 0 auto 10px; }
 .gauge-cell { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; }

@@ -1341,6 +1341,54 @@
     Heptane: [15.3, 0.0, 0.0, 0], Cyclohexane: [16.8, 0.0, 0.2, 0]
   };
   const ORG_TARGET = [17.6, 13.5, 9.7]; // 理想（良）溶剂 HSP 目标
+  /* ============ 溶剂体系统一模块 Tab ============ */
+  const SUITE_TAB_IDS = { orgsolub: 'orgsolub', hansen: 'hansen', tempsol: 'tempsol' };
+  const LEGACY_HASH_TO_TAB = {
+    'orgSolub-card': 'orgsolub',
+    'adv-hansen-card': 'hansen',
+    'adv-tempsol-card': 'tempsol',
+    'solvent-suite-card': 'orgsolub',
+  };
+
+  function suiteShowTab(tab, opts) {
+    const name = SUITE_TAB_IDS[tab] || tab || 'orgsolub';
+    const card = $('solvent-suite-card');
+    if (!card) return;
+    card.querySelectorAll('.suite-tab-btn').forEach(btn => {
+      const on = btn.getAttribute('data-suite-tab') === name;
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    card.querySelectorAll('.suite-tab-panel').forEach(panel => {
+      panel.classList.toggle('active', panel.getAttribute('data-suite-panel') === name);
+    });
+    if (opts && opts.scroll) {
+      card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+
+  function suiteHandleHash() {
+    const raw = (location.hash || '').replace(/^#/, '');
+    if (!raw) return;
+    const tab = LEGACY_HASH_TO_TAB[raw];
+    if (!tab) return;
+    suiteShowTab(tab, { scroll: true });
+  }
+
+  function suiteBindUi() {
+    const card = $('solvent-suite-card');
+    if (!card || card.dataset.suiteBound === '1') return;
+    card.dataset.suiteBound = '1';
+    card.querySelectorAll('.suite-tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        suiteShowTab(btn.getAttribute('data-suite-tab'), { scroll: false });
+      });
+    });
+    window.addEventListener('hashchange', suiteHandleHash);
+    // 首次进入若带旧锚点，切换对应 tab
+    suiteHandleHash();
+  }
+
   let _orgSolubMpManual = false;
 
   function setOrgSolubMpSrc(label) {
@@ -1520,7 +1568,7 @@
     const worst = anti[0] || lowRa[lowRa.length - 1];
 
     let html = `<div class="row-note">化合物 logP≈<b>${logP != null ? logP.toFixed(2) : '—'}</b>、TPSA≈<b>${tpsa != null ? tpsa.toFixed(0) : '—'}</b>、MW≈<b>${mw != null ? mw.toFixed(1) : '—'}</b>；熔点 <b>${mp}</b>℃（来源：<b>${escapeHtml(mpInfo.source)}</b>${mpInfo.detail ? '，' + escapeHtml(mpInfo.detail) : ''}）。25℃ 基线已校准至文献异噁唑啉羧酸中间体，其余按亲脂性(+0.30·ΔlogP)、极性(−0.004·ΔTPSA)、熔点(−0.01·ΔMP) 外推；其它温度用简化 van’t Hoff <b>估算</b>。</div>`;
-    html += `<div class="row-note">溶质 HSP（共享 <code>HspShared</code>${solute.fromAdvance ? '，与当前 Hansen 卡一致' : ''}）：δD=<b>${dDs}</b>、δP=<b>${dPs}</b>、δH=<b>${dHs}</b> MPa½；Ra = √(4ΔδD²+ΔδP²+ΔδH²)。<a href="#adv-hansen-card" id="orgSolubLinkHansen">在 Hansen 模块查看 →</a></div>`;
+    html += `<div class="row-note">溶质 HSP（共享 <code>HspShared</code>${solute.fromAdvance ? '，与当前 Hansen 卡一致' : ''}）：δD=<b>${dDs}</b>、δP=<b>${dPs}</b>、δH=<b>${dHs}</b> MPa½；Ra = √(4ΔδD²+ΔδP²+ΔδH²)。<a href="#adv-hansen-card" id="orgSolubLinkHansen">在 Hansen 三维查看 →</a></div>`;
 
     html += '<table class="tool-table"><thead><tr><th>溶剂</th>';
     displayTemps.forEach(t => { html += `<th>${t}℃ mg/mL<br><span style="font-weight:400;font-size:11px;color:#888">估算</span></th>`; });
@@ -1561,8 +1609,8 @@
     if (link) {
       link.addEventListener('click', (e) => {
         e.preventDefault();
-        const card = $('adv-hansen-card');
-        if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        suiteShowTab('hansen', { scroll: true });
+        try { history.replaceState(null, '', '#adv-hansen-card'); } catch (_) {}
       });
     }
   }
@@ -1579,12 +1627,13 @@
       $('orgSolubMp').dataset.autoFilled = '1';
     }
     setOrgSolubMpSrc(mpInfo.source);
+    suiteShowTab('orgsolub', { scroll: false });
     orgSolubCalc();
   }
 
   function orgSolubGotoHansen() {
-    const card = $('adv-hansen-card');
-    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    suiteShowTab('hansen', { scroll: true });
+    try { history.replaceState(null, '', '#adv-hansen-card'); } catch (_) {}
   }
 
   /* ============ ⑳ GSE pH–溶解度曲线 ============ */
@@ -2084,6 +2133,8 @@
       if (pk.bases && pk.bases.length) $('speciesBase').value = pk.bases.map(b => b.pka).join(', ');
       setStatusNote('已带入当前化合物 pKa。');
     });
+    // 溶剂体系统一模块
+    suiteBindUi();
     // ⑲ 有机溶剂溶解度
     const osBtn = $('orgSolubCalc'); if (osBtn) osBtn.addEventListener('click', orgSolubCalc);
     const osUse = $('orgSolubUseCurrent'); if (osUse) osUse.addEventListener('click', orgSolubUseCurrent);
@@ -2204,4 +2255,5 @@
   window.ocrViaMolScribe = ocrViaMolScribe;
   // 有机溶剂溶解度：供 Hansen 卡交叉跳转调用
   window.OrgSolub = { calc: orgSolubCalc, useCurrent: orgSolubUseCurrent, gotoHansen: orgSolubGotoHansen };
+  window.SolventSuite = { showTab: suiteShowTab, handleHash: suiteHandleHash };
 })();

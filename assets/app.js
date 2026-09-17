@@ -1087,7 +1087,13 @@
   }
   function scrollToModule(id) {
     const el = document.getElementById(id);
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (!el) return;
+    const tab = el.getAttribute && el.getAttribute('data-suite-tab');
+    if (tab && window.SolventSuite && typeof window.SolventSuite.showTab === 'function') {
+      window.SolventSuite.showTab(tab, { scroll: false });
+    }
+    const target = (tab && document.getElementById('solvent-suite-card')) || el;
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   /* ---------- 渲染：性质卡片（分组展示） ---------- */
@@ -2200,15 +2206,13 @@
     { id: 'adv-esol-card', i18n: 'tocAdvEsol' },
     { id: 'adv-ichm7-card', i18n: 'tocAdvM7' },
     { id: 'adv-salt-card', i18n: 'tocAdvSalt' },
-    { id: 'adv-hansen-card', i18n: 'tocAdvHansen' },
-    { id: 'adv-tempsol-card', i18n: 'tocAdvTemp' },
     { id: 'adv-soldist-card', i18n: 'tocAdvSol' },
     { id: 'adv-green-card', i18n: 'tocAdvGreen' },
     { id: 'adv-excipient-card', i18n: 'tocAdvExc' },
     { id: 'adv-retro-card', i18n: 'tocAdvRetro' },
     { id: 'adv-keyprops-card', i18n: 'tocAdvKey' },
     { id: 'adv-electronic-card', i18n: 'tocAdvQM' },
-    { id: 'orgSolub-card', i18n: 'tocOrgSolub' },
+    { id: 'solvent-suite-card', i18n: 'tocSolventSuite' },
     { id: 'gsePh-card', i18n: 'tocGsePh' },
     { id: 'bufferCap-card', i18n: 'tocBufferCap' },
     { id: 'phSpec-card', i18n: 'tocPhSpec' },
@@ -2949,6 +2953,10 @@
     ctRadar: { zh: '类药性雷达图', en: 'Drug-likeness Radar' },
     ctLead: { zh: '类药性进阶（先导优化 / 片段规则）', en: 'Advanced Drug-likeness' },
     ctOrgSolub: { zh: '有机溶剂溶解度预测', en: 'Organic Solubility Prediction' },
+    ctSolventSuite: { zh: '溶剂体系与溶解度（Hansen · 有机溶剂 · 重结晶）', en: 'Solvent Suite (Hansen · Organic · Recryst)' },
+    suiteTabOrg: { zh: '有机溶剂溶解度', en: 'Organic Solubility' },
+    suiteTabHansen: { zh: 'Hansen 三维', en: 'Hansen 3D' },
+    suiteTabTemp: { zh: '温度/重结晶相图', en: 'Temp / Recryst' },
     ctGsePh: { zh: 'GSE pH–溶解度曲线', en: 'GSE pH–Solubility Curve' },
     ctBufferCap: { zh: '缓冲容量计算', en: 'Buffer Capacity β' },
     ctPhSpec: { zh: 'pH 质量标准评估', en: 'pH Specification Eval' },
@@ -2967,6 +2975,7 @@
     tocRadar: { zh: '类药性雷达图', en: 'Radar Chart' },
     tocMedchem: { zh: '类药性进阶', en: 'Lead Optimization' },
     tocOrgSolub: { zh: '有机溶剂溶解度', en: 'Organic Solubility' },
+    tocSolventSuite: { zh: '溶剂体系与溶解度', en: 'Solvent Suite' },
     tocGsePh: { zh: 'GSE pH–溶解度', en: 'GSE pH–Solubility' },
     tocBufferCap: { zh: '缓冲容量 β', en: 'Buffer Capacity β' },
     tocPhSpec: { zh: 'pH 质量标准', en: 'pH Spec Eval' },
