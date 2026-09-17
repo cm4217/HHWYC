@@ -141,9 +141,36 @@ window.PubChem = (function () {
     return [];
   }
 
+  // ACC11：尽量拉取 PubChem 实验性质（PUG-View；失败则静默忽略，不打断主链路）
+  async function getExperimentalProps(cid) {
+    const out = { expSolubility: null, expSolubilityUnit: '', expMeltingPoint: null, expPka: null, expPkaList: [] };
+    if (!cid) return out;
+    try {
+      const url = 'https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/' + cid + '/JSON?heading=Experimental+Properties';
+      const data = await getJSON(url, 2);
+      if (!data || !data.Record) return out;
+      const blob = JSON.stringify(data);
+      // 粗解析：从文本中抓熔点 / 溶解度 / pKa（PubChem View 结构多变）
+      const mp = blob.match(/Melting Point[^\d\-]*([\-]?\d+(?:\.\d+)?)/i);
+      if (mp) out.expMeltingPoint = parseFloat(mp[1]);
+      const pkaM = blob.match(/pKa[^\d\-]*([\-]?\d+(?:\.\d+)?)/i);
+      if (pkaM) {
+        out.expPka = parseFloat(pkaM[1]);
+        out.expPkaList.push({ pka: out.expPka, name: 'PubChem Experimental pKa', type: 'unknown' });
+      }
+      const sol = blob.match(/Solubility[^\d]*([\d\.]+)\s*(mg\/mL|g\/L|mg\/L)/i);
+      if (sol) {
+        out.expSolubility = parseFloat(sol[1]);
+        out.expSolubilityUnit = sol[2];
+      }
+    } catch (e) { /* 实验性质可选，失败不影响主预测 */ }
+    return out;
+  }
+
   // 把 PubChem 属性对象标准化成 resolve 的返回格式
-  function buildResult(p, cid, synonyms, fallbackName, fallbackSmiles, refs) {
+  function buildResult(p, cid, synonyms, fallbackName, fallbackSmiles, refs, expProps) {
     const cas = findCAS(synonyms) || (refs && refs.cas) || null;
+    const exp = expProps || {};
     const r = {
       cid: cid || (p && p.cid),
       formula: p && p.MolecularFormula,
@@ -165,6 +192,11 @@ window.PubChem = (function () {
       synonyms: synonyms || [],
       imageUrl: (cid || (p && p.cid)) ? BASE + '/compound/cid/' + (cid || p.cid) + '/PNG?image_size=400' : null,
       refs: refs || null,
+      expSolubility: exp.expSolubility != null ? exp.expSolubility : null,
+      expSolubilityUnit: exp.expSolubilityUnit || '',
+      expMeltingPoint: exp.expMeltingPoint != null ? exp.expMeltingPoint : null,
+      expPka: exp.expPka != null ? exp.expPka : null,
+      expPkaList: exp.expPkaList || [],
     };
     // 若已知 CAS/CID，自动补全常见外部库引用链接
     if (!r.refs) r.refs = {};
@@ -307,8 +339,22 @@ window.PubChem = (function () {
       const local = await resolveViaLocalDict(raw);
       if (local && local.canonicalSmiles) return local;
     }
-    return buildResult(p, cid, syns, raw, canonical);
+    const built = buildResult(p, cid, syns, raw, canonical);
+    return enrichWithExperimental(built);
   }
 
-  return { resolve, resolveCAS, cactusSMILES, resolveViaLocalDict };
+  async function enrichWithExperimental(result) {
+    if (!result || !result.cid) return result;
+    try {
+      const exp = await getExperimentalProps(result.cid);
+      result.expSolubility = exp.expSolubility;
+      result.expSolubilityUnit = exp.expSolubilityUnit;
+      result.expMeltingPoint = exp.expMeltingPoint;
+      result.expPka = exp.expPka;
+      result.expPkaList = exp.expPkaList || [];
+    } catch (e) {}
+    return result;
+  }
+
+  return { resolve, enrichWithExperimental, getExperimentalProps, resolveCAS, cactusSMILES, resolveViaLocalDict };
 })();

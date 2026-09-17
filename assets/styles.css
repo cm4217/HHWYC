@@ -1936,3 +1936,22 @@ html { scroll-behavior: smooth; }
   html.dark .toc-item.active .toc-num { background: rgba(255,255,255,.25); color: #fff; }
 }
 
+
+/* ===== ACC11 UI ===== */
+.acc-unc-bar {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  padding: 8px 12px; margin: 0 0 10px; border-radius: 10px;
+  background: linear-gradient(90deg, #f0fdf4, #fefce8);
+  border: 1px solid #e2e8f0; font-size: 13px; color: #334155;
+}
+.acc-conf-light { font-weight: 700; margin-left: 4px; }
+.acc-std-block code {
+  display: inline-block; max-width: 100%; overflow-wrap: anywhere;
+  background: #f8fafc; padding: 2px 6px; border-radius: 6px; font-size: 12px;
+}
+.acc-3d-fallback {
+  padding: 10px 12px; border: 1px dashed #f59e0b; border-radius: 10px;
+  background: #fffbeb; margin-top: 6px;
+}
+.acc-alert-hit { cursor: help; }
+.badge-neutral { background: #e2e8f0; color: #334155; }

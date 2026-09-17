@@ -265,7 +265,7 @@
       <!-- 水溶解度预测 -->
       <section class="card solubility-card" id="solubility-card">
         <div class="card-title"><span data-i18n="ctSol">水溶解度预测（QSAR 模型）</span><span class="badge badge-src-rd">RDKit + QSAR</span></div>
-        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span><b>logS</b> 是溶解度对数（mol/L），<b>数值越大越易溶</b>（0以上高溶、−2~0易溶、−4~−2可溶、−6~−4中等可溶、−6以下难溶）。<b>mg/mL</b> 是换算后的实用浓度（≈ g/L）。<b>ESOL / Ali</b> 是两种常见 QSAR 模型，结果接近则可信度高；两者有偏差属正常，可参考<b>综合均值</b>。API 水溶性差常是制剂难点，可结合下方 pH 表看。</div>
+        <div class="module-summary"><span class="k" data-i18n="howtoread">怎么读</span><b>logS</b> 是溶解度对数（mol/L），<b>数值越大越易溶</b>。<b>ESOL / Ali / 轻量模型</b>并列，默认用<b>共识 logP</b>（Crippen+XLogP3）重算并标注来源；与 SwissADME 可能偏差。置信灯反映多模型一致性。API 水溶性差常是制剂难点，可结合下方 pH 表看。</div>
         <div id="solubilityPanel"></div>
         <div id="phPanel" style="margin-top:16px"></div>
       </section>
@@ -819,6 +819,14 @@
     </div>
   </div>
 
+
+      <!-- ACC11 金标准回归说明 -->
+      <section class="card" id="acc11-gold-card">
+        <div class="card-title">金标准回归（ACC11） <span class="badge badge-src-rd">tests/</span></div>
+        <div class="module-summary"><span class="k">怎么读</span>仓库内 <code>tests/gold-standard.json</code> 含 ≥15 个常见 API 的 SMILES 与期望描述符范围；用 Node 运行 <code>node tests/run-gold-check.mjs</code>（纯描述符启发式，不加载 WASM）或在浏览器打开本页后于控制台执行 <code>Acc11Gold.run()</code>（若已加载检查脚本）。用于提准改动后的快速回归。</div>
+        <div class="row-note">验证步骤：① <code>cd /workspace/HHWYC-acc && node tests/run-gold-check.mjs</code> ② 浏览器预测阿司匹林/布洛芬等，核对共识 logP、溶解度多模型、标准化提示与置信灯。</div>
+      </section>
+
   <!-- 一键置顶 -->
   <button id="scrollTopBtn" class="scroll-top-btn" type="button" title="回到顶部" aria-label="回到顶部">
     <svg class="scroll-top-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -831,6 +839,7 @@
   <script defer src="assets/seed-db.js"></script>
   <script defer src="assets/cas-kb.js"></script>
   <script defer src="assets/predict.js"></script>
+  <script defer src="assets/acc11.js"></script>
   <script defer src="assets/examples.js"></script>
   <script defer src="assets/compound-dict.js"></script>
   <script defer src="assets/vendor/xlsx.full.min.js"></script>

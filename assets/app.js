@@ -574,6 +574,15 @@
     } catch (e) {}
   }
 
+
+  /* ---------- ACC11：标准化 + 共识预测包装 ---------- */
+  function runPredictEnhanced(desc, pka, pubchem, eng, smiles, rdExtra) {
+    if (window.Acc11 && typeof Acc11.enhanceAll === 'function') {
+      return Acc11.enhanceAll(desc, pka, pubchem, eng, smiles, rdExtra);
+    }
+    return Predict.all(desc, pka);
+  }
+
   async function analyzeSingle(raw, forceType, role, seq) {
     const type = forceType || detectType(raw);
     let pc = null;
@@ -624,17 +633,35 @@
         formula: hit.formula || '', groups: hit.groups || [], acidbase: hit.acidbase || null,
         pains: hit.pains || [], brenk: hit.brenk || [],
       };
-      const pred = Predict.all(rdCached.desc, rdCached.pka);
+      const pred = runPredictEnhanced(rdCached.desc, rdCached.pka, pc, window.RDKitEngine, smiles, rdCached);
       const toxicity = hit.toxicity ? { parsed: true, all: hit.toxicity.all || [], byCat: hit.toxicity.byCat || {}, total: hit.toxicity.total || 0, severe: hit.toxicity.severe || 0, summary: hit.toxicity.summary || '' } : null;
-      return { type, input: raw.trim(), role: finalRole, pubchem: pc, rdkit: rdCached, smiles, pred, geometry: hit.geometry || null, toxicity, form: hit.form || null, conformer: null, conformers: [], cached: true };
+      const stdCached = (window.Acc11 && hit.standardize) ? hit.standardize : (window.Acc11 ? Acc11.standardizeStructure(smiles, window.RDKitEngine) : null);
+      return { type, input: raw.trim(), role: finalRole, pubchem: pc, rdkit: rdCached, smiles, pred, geometry: hit.geometry || null, toxicity, form: hit.form || null, conformer: null, conformers: [], cached: true, standardize: stdCached };
     }
 
     const eng = await RDKitEngine.init();
     updateEngineStatus(); // 引擎来源（本地/CDN）在加载后确定，刷新状态徽标
     if (seq != null && seq !== _runSeq) throw new Error('SUPERSEDED'); // RDKit 计算前再校验一次，过期查询不再抢占 wasm 资源
-    updateCalcOverlay('③ 本地 RDKit 计算理化描述符…');
-    const rd = eng.compute(smiles);
-    const pred = Predict.all(rd.desc, rd.pka);
+    updateCalcOverlay('③ 结构标准化 + 本地 RDKit 计算…');
+    // ACC11：预测前尽量盐剥离/中和/canonical（WASM 能力范围内）
+    let standardize = null;
+    let smilesForCalc = smiles;
+    try {
+      if (window.Acc11 && Acc11.standardizeStructure) {
+        standardize = Acc11.standardizeStructure(smiles, eng);
+        if (standardize && standardize.standardized) smilesForCalc = standardize.standardized;
+      }
+    } catch (eStd) { standardize = { original: smiles, standardized: smiles, changed: false, note: '标准化跳过：' + (eStd && eStd.message) }; }
+    // 可选：补拉实验性质（若 resolve 未附带）
+    try {
+      if (pc && pc.cid && window.PubChem && PubChem.enrichWithExperimental && pc.expPka == null && pc.expMeltingPoint == null) {
+        pc = await PubChem.enrichWithExperimental(pc);
+      }
+    } catch (eExp) {}
+    const rd = eng.compute(smilesForCalc);
+    if (standardize) rd.standardize = standardize;
+    const pred = runPredictEnhanced(rd.desc, rd.pka, pc, eng, smilesForCalc, rd);
+    smiles = smilesForCalc; // 后续缓存/展示用标准化后 SMILES
     let geometry = null;
     try { geometry = eng.computeGeometry(smiles); } catch (e) { geometry = null; }
     let toxicity = null;
@@ -686,7 +713,7 @@
       });
     }
     if (conformers.length) conformer = conformers[0];
-    return { type, input: raw.trim(), role: finalRole, pubchem: pc, rdkit: rd, smiles, pred, geometry, toxicity, form, conformer, conformers };
+    return { type, input: raw.trim(), role: finalRole, pubchem: pc, rdkit: rd, smiles, pred, geometry, toxicity, form, conformer, conformers, standardize };
   }
 
   // ⑨ 结果缓存写入：在 runSingle 成功渲染后调用
@@ -708,6 +735,7 @@
         acidbase: d.rdkit ? d.rdkit.acidbase : null,
         pains: d.rdkit ? d.rdkit.pains : [],
         brenk: d.rdkit ? d.rdkit.brenk : [],
+        standardize: d.standardize || null,
         toxicity: d.toxicity && d.toxicity.parsed ? {
           all: d.toxicity.all || [], byCat: d.toxicity.byCat || {},
           total: d.toxicity.total || 0, severe: d.toxicity.severe || 0, summary: d.toxicity.summary || '',
@@ -1049,8 +1077,16 @@
       { label: '精确分子量', unit: 'g/mol', src: 'rd', icon: 'target', get: d => d.exactmw != null ? +d.exactmw.toFixed(4) : null, tip: '高分辨质谱（HRMS）的精确分子量' },
     ]},
     { title: '亲脂性 (Lipophilicity)', items: [
-      { label: 'logP (Crippen)', src: 'rd', ideal: [0, 4], icon: 'droplet', get: d => d.CrippenClogP != null ? +d.CrippenClogP.toFixed(2) : null, tip: '脂水分配系数；Lipinski ≤5' },
-      { label: 'XLogP (PubChem)', src: 'pub', ideal: [0, 4], icon: 'droplet', get: (d, pc) => (pc && pc.xlogp != null) ? +pc.xlogp.toFixed(2) : null, tip: 'PubChem 经验 logP；与 Crippen 互为印证' },
+      { label: '共识 logP', src: 'rd', ideal: [0, 4], icon: 'droplet', get: (d, pc, data) => {
+          const lp = data && data.pred && data.pred.logP;
+          if (lp && lp.consensus != null) return +lp.consensus.toFixed(2);
+          return d.CrippenClogP != null ? +(+d.CrippenClogP).toFixed(2) : null;
+        }, tip: 'Crippen 与 XLogP3 加权共识；规则/溶解度默认用此值' },
+      { label: 'logP (Crippen)', src: 'rd', ideal: [0, 4], icon: 'droplet', get: d => {
+          const raw = d._CrippenClogP_raw != null ? d._CrippenClogP_raw : d.CrippenClogP;
+          return raw != null ? +(+raw).toFixed(2) : null;
+        }, tip: 'RDKit CrippenClogP 单独值' },
+      { label: 'XLogP (PubChem)', src: 'pub', ideal: [0, 4], icon: 'droplet', get: (d, pc) => (pc && pc.xlogp != null) ? +pc.xlogp.toFixed(2) : null, tip: 'PubChem XLogP3；与 Crippen 互为印证' },
       { label: '摩尔折射率 MR', src: 'rd', icon: 'prism', get: d => d.CrippenMR != null ? +d.CrippenMR.toFixed(2) : null, tip: '与分子体积相关，用于 Lipinski 类药五规则' },
     ]},
     { title: '极性 / 氢键', items: [
@@ -1088,10 +1124,37 @@
   function renderProps(data) {
     const d = data.rdkit.desc, pc = data.pubchem;
     let html = '';
+    // ACC11：结构标准化前后
+    if (data.standardize) {
+      const st = data.standardize;
+      html += '<div class="prop-group acc-std-block"><div class="prop-group-title">结构标准化（ACC11）</div>';
+      html += `<div class="row-note">输入：<code>${escapeHtml(st.original || '')}</code></div>`;
+      html += `<div class="row-note">标准化后：<code>${escapeHtml(st.standardized || '')}</code>` +
+        (st.changed ? ' <span class="badge badge-ok">已变更</span>' : ' <span class="badge badge-neutral">未变</span>') + '</div>';
+      if (st.strippedFragments && st.strippedFragments.length) {
+        html += `<div class="row-note">剥离片段：${st.strippedFragments.map(escapeHtml).join(' · ')}</div>`;
+      }
+      if (st.note) html += `<div class="row-note">${escapeHtml(st.note)}</div>`;
+      html += '</div>';
+    }
+    // ACC11：实验值优先分列
+    if (data.pred && data.pred.experimental && data.pred.experimental.rows && data.pred.experimental.rows.length) {
+      html += '<div class="prop-group"><div class="prop-group-title">实验值优先（PubChem / 计算分列）</div>';
+      html += '<table class="data prop-table"><thead><tr><th>性质</th><th>优先展示</th><th>实验</th><th>计算</th><th>来源</th></tr></thead><tbody>';
+      for (const r of data.pred.experimental.rows) {
+        html += `<tr><td class="p-name">${escapeHtml(r.label)}</td>` +
+          `<td class="p-val"><b>${r.display}${r.unit ? ' ' + r.unit : ''}</b></td>` +
+          `<td>${r.experimental != null ? r.experimental : '—'}</td>` +
+          `<td>${r.calculated != null ? r.calculated : '—'}</td>` +
+          `<td><span class="badge ${r.badge === '实验' ? 'badge-src-pub' : 'badge-src-rd'}">${r.badge}</span></td></tr>`;
+      }
+      html += '</tbody></table>';
+      html += `<div class="row-note">${escapeHtml(data.pred.experimental.note || '')}</div></div>`;
+    }
     for (let gi = 0; gi < PROP_GROUPS.length; gi++) {
       const g = PROP_GROUPS[gi];
       const cards = g.items.map(p => {
-        const val = p.get(d, pc);
+        const val = p.get.length >= 3 ? p.get(d, pc, data) : p.get(d, pc);
         if (val == null) return '';
         const cls = p.src === 'pub' ? 'badge-src-pub' : 'badge-src-rd';
         const lbl = p.src === 'pub' ? 'PubChem' : 'RDKit';
@@ -1106,15 +1169,63 @@
       }).join('');
       html += `<div class="prop-group"><div class="prop-group-title" data-i18n="pg${gi}">${T('pg' + gi)}</div><div class="metric-grid">${cards}</div></div>`;
     }
+    // logP 共识说明
+    if (data.pred && data.pred.logP) {
+      const lp = data.pred.logP;
+      html += `<div class="row-note">logP 共识：${lp.consensus != null ? lp.consensus : '—'}（${escapeHtml(lp.method || '')}` +
+        (lp.spread != null ? `，模型差 ${lp.spread}` : '') + `）。${escapeHtml(lp.note || '')}</div>`;
+    }
     html += renderPkaBlock(data);
+    // ACC11：描述符增强摘要 + 3D 对照
+    html += renderAcc11Extras(data);
     els.propGrid.innerHTML = html;
     applyI18nDom();
+  }
+
+  function renderAcc11Extras(data) {
+    let html = '';
+    const meta = data.pred && data.pred.descriptorsMeta;
+    if (meta) {
+      html += '<div class="sub-title" style="margin-top:14px">描述符增强（ACC11）</div>';
+      html += `<div class="row-note">可用数值描述符 <b>${meta.count}</b> 项。${escapeHtml(meta.note || '')}</div>`;
+      if (meta.missing && meta.missing.length) {
+        html += `<div class="row-note">本 WASM 未返回（节选）：${meta.missing.slice(0, 12).map(escapeHtml).join(', ')}${meta.missing.length > 12 ? '…' : ''}</div>`;
+      }
+    }
+    const c3 = data.pred && data.pred.compare3d;
+    if (c3) {
+      html += '<div class="sub-title" style="margin-top:14px">3D 对照（ACC11）</div>';
+      if (!c3.supported && c3.fallback) {
+        html += `<div class="acc-3d-fallback"><span class="badge badge-warn">${escapeHtml(c3.fallback.title)}</span>`;
+        html += '<table class="data prop-table"><thead><tr><th>2D 对照项</th><th>数值</th></tr></thead><tbody>';
+        for (const it of (c3.fallback.items || [])) {
+          html += `<tr><td class="p-name">${escapeHtml(it.name)}</td><td class="p-val">${it.value != null ? it.value : '—'}</td></tr>`;
+        }
+        html += '</tbody></table>';
+        html += `<div class="row-note">${escapeHtml(c3.fallback.note || c3.note || '')}</div></div>`;
+      } else if (c3.threed) {
+        html += '<table class="data prop-table"><thead><tr><th>描述符</th><th>2D</th><th>3D 后</th><th>Δ</th></tr></thead><tbody>';
+        html += `<tr><td>TPSA</td><td>${c3.twod.tpsa != null ? c3.twod.tpsa : '—'}</td><td>${c3.threed.tpsa != null ? c3.threed.tpsa : '—'}</td><td>${c3.delta && c3.delta.tpsa != null ? c3.delta.tpsa : '—'}</td></tr>`;
+        html += '</tbody></table>';
+        html += `<div class="row-note">${escapeHtml(c3.note || '')}</div>`;
+      }
+    }
+    return html;
   }
 
   // pKa 专节：电离基团列表 + 由 pKa/logP 派生的 logD、净电荷、等电点
   function renderPkaBlock(data) {
     const pk = data.pred.pka;
-    let html = '<div class="sub-title" style="margin-top:14px" data-i18n="subIonGroup">电离基团与 pKa（官能团经验估算）</div>';
+    const srcLabel = (pk.sourceLabel || '估算');
+    let html = `<div class="sub-title" style="margin-top:14px" data-i18n="subIonGroup">电离基团与 pKa</div>`;
+    html += `<div class="row-note">来源优先：<span class="badge ${srcLabel === '实验' ? 'badge-src-pub' : 'badge-src-rd'}">${srcLabel}</span> ${escapeHtml(pk.note || '')}</div>`;
+    if (pk.experimental && pk.experimental.length) {
+      html += '<table class="data prop-table"><thead><tr><th>实验 pKa</th><th>数值</th><th>来源</th></tr></thead><tbody>';
+      for (const e of pk.experimental) {
+        html += `<tr><td class="p-name">${escapeHtml(e.name)}</td><td class="p-val">${(+e.pka).toFixed(2)}</td><td><span class="badge badge-src-pub">实验</span></td></tr>`;
+      }
+      html += '</tbody></table>';
+    }
     if (!pk.hasIonizable) {
       html += '<div class="row-note">未检出可电离基团（中性分子），logD ≈ logP，生理 pH 下净电荷 ≈ 0，无等电点。</div>';
       return html;
@@ -1124,10 +1235,11 @@
       const typeCell = isAcid
         ? '<td style="color:#c0392b">酸·去质子</td>'
         : '<td style="color:#2980b9">碱·质子化</td>';
-      return `<tr><td class="p-name">${escapeHtml(g.name)}</td>${typeCell}<td class="p-val">${g.pka.toFixed(2)}${g.corrected ? ' *' : ''}</td><td>${g.count}</td></tr>`;
+      const tag = g.sourceLabel || '估算';
+      return `<tr><td class="p-name">${escapeHtml(g.name)}</td>${typeCell}<td class="p-val">${g.pka.toFixed(2)}${g.corrected ? ' *' : ''}</td><td>${g.count}</td><td><span class="badge badge-src-rd">${tag}</span></td></tr>`;
     }).join('');
-    html += `<table class="data prop-table"><thead><tr><th data-i18n="thIonGroup">电离基团</th><th data-i18n="thType">类型</th><th data-i18n="thPka">pKa（估算）</th><th data-i18n="thCount">数量</th></tr></thead><tbody>${rows}</tbody></table>`;
-    html += '<div class="row-note">* 经芳香环取代基电子效应校正。pKa 为<b>官能团结构经验估算</b>（RDKit SMARTS 识别 + 取代基校正，非实验值）；多电离基团时为近似，未计入相邻基团耦合效应。</div>';
+    html += `<table class="data prop-table"><thead><tr><th data-i18n="thIonGroup">电离基团</th><th data-i18n="thType">类型</th><th data-i18n="thPka">pKa</th><th data-i18n="thCount">数量</th><th>来源</th></tr></thead><tbody>${rows}</tbody></table>`;
+    html += '<div class="row-note">* 经芳香环取代基电子效应校正。本地 pKa 为<b>官能团启发式估算</b>（已扩充常见酸碱基团）；有外部实验值时优先标「实验」。多电离基团未计入耦合。</div>';
     html += renderPkaBars(pk);
     html += '<div class="sub-title" style="margin-top:12px" data-i18n="subDerived">派生酸碱参数（由 pKa 与 logP 计算）</div>';
     const logD74 = pk.logD74 != null ? pk.logD74.toFixed(2) : '—';
@@ -1851,12 +1963,23 @@
   function renderSolubility(data) {
     const sol = data.pred.solubility;
     if (!sol) { els.solubilityPanel.innerHTML = '<div class="row-note">溶解度模型不可用（缺少 logP/TPSA 描述符）。</div>'; els.phPanel.innerHTML = ''; return; }
-    let html = '<table class="data sol-table"><thead><tr><th data-i18n="thModel">模型</th><th data-i18n="thLogS">logS (mol/L)</th><th data-i18n="thMgml">溶解度 (mg/mL)</th><th data-i18n="thMolL">溶解度 (mol/L)</th><th data-i18n="thCls">溶解度等级</th></tr></thead><tbody>';
+    const unc = data.pred.uncertainty || {};
+    let html = '';
+    if (unc.logS) {
+      html += `<div class="acc-unc-bar">logS 置信 ${unc.logS.emoji} <b>${unc.logS.level}</b>` +
+        (unc.logS.interval ? ` · 区间 [${unc.logS.interval[0]}, ${unc.logS.interval[1]}]` : '') +
+        ` · ${escapeHtml(unc.logS.reason || '')}</div>`;
+    }
+    html += `<div class="row-note">所用 logP 来源：<b>${escapeHtml(sol.logPSource || 'CrippenClogP')}</b>` +
+      (sol.logPUsed != null ? ` = ${(+sol.logPUsed).toFixed(3)}` : '') +
+      `。与 SwissADME 可能偏差，请对照多模型。</div>`;
+    html += '<table class="data sol-table"><thead><tr><th data-i18n="thModel">模型</th><th>logP 来源</th><th data-i18n="thLogS">logS (mol/L)</th><th data-i18n="thMgml">溶解度 (mg/mL)</th><th data-i18n="thMolL">溶解度 (mol/L)</th><th data-i18n="thCls">溶解度等级</th></tr></thead><tbody>';
     for (const m of sol.models) {
-      html += `<tr><td>${m.name}</td><td>${m.logS.toFixed(2)}</td><td>${fmtSci(m.mgml)}</td><td>${fmtSci(m.molL)}</td><td><span class="badge badge-${clsBadge(m.cls.label)}">${m.cls.label}</span></td></tr>`;
+      const tag = m.tag ? ` <span class="badge badge-neutral">${escapeHtml(m.tag)}</span>` : '';
+      html += `<tr><td>${escapeHtml(m.name)}${tag}</td><td>${escapeHtml(m.logPSource || sol.logPSource || '—')}</td><td>${(+m.logS).toFixed(2)}</td><td>${fmtSci(m.mgml)}</td><td>${fmtSci(m.molL)}</td><td><span class="badge badge-${clsBadge(m.cls.label)}">${m.cls.label}</span></td></tr>`;
     }
     if (sol.consensus) {
-      html += `<tr class="consensus-row"><td><span data-i18n="thConsensus">综合参考</span> (ESOL/Ali 均值)</td><td><b>${sol.consensus.logS.toFixed(2)}</b></td><td><b>${fmtSci(sol.consensus.mgml)}</b></td><td><b>${fmtSci(sol.consensus.molL)}</b></td><td><span class="badge badge-${clsBadge(sol.consensus.cls.label)}">${sol.consensus.cls.label}</span></td></tr>`;
+      html += `<tr class="consensus-row"><td><span data-i18n="thConsensus">综合参考</span> (多模型均值)</td><td>${escapeHtml(sol.consensus.logPSource || sol.logPSource || '—')}</td><td><b>${sol.consensus.logS.toFixed(2)}</b></td><td><b>${fmtSci(sol.consensus.mgml)}</b></td><td><b>${fmtSci(sol.consensus.molL)}</b></td><td><span class="badge badge-${clsBadge(sol.consensus.cls.label)}">${sol.consensus.cls.label}</span></td></tr>`;
     }
     html += '</tbody></table>';
     html += `<div class="row-note" style="margin-top:8px">${escapeHtml(sol.note)}</div>`;
@@ -1938,16 +2061,19 @@
   function drugFriendliness(data) {
     const pains = data.rdkit.pains || [];
     const brenk = data.rdkit.brenk || [];
-    let html = '<div class="sub-title" style="margin-top:14px" data-i18n="subChemFriendly">化学友好性（PAINS / Brenk 警示子集）</div>';
+    let html = '<div class="sub-title" style="margin-top:14px" data-i18n="subChemFriendly">化学友好性（PAINS / Brenk / 遗传毒性警示子集）</div>';
     const items = [];
-    pains.forEach(g => items.push({ name: g.name, src: 'PAINS' }));
-    brenk.forEach(g => items.push({ name: g.name, src: 'Brenk' }));
+    pains.forEach(g => items.push({ name: g.name, src: 'PAINS', count: g.count }));
+    brenk.forEach(g => items.push({ name: g.name, src: 'Brenk', count: g.count }));
     if (!items.length) {
-      html += '<div class="row-note">未检出常见 PAINS/Brenk 警示结构（基于高频子集，非完整过滤库）。</div>';
+      html += '<div class="row-note">未检出常见 PAINS/Brenk 警示结构（ACC11 已扩充子集，仍非完整过滤库）。</div>';
     } else {
-      html += '<div class="alert-list">' + items.map(i => `<span class="badge badge-warn">${i.src}：${escapeHtml(i.name)}</span>`).join(' ') + '</div>';
+      html += '<div class="alert-list">' + items.map(i =>
+        `<span class="badge badge-warn acc-alert-hit" title="SMARTS 命中×${i.count || 1}">${i.src}：${escapeHtml(i.name)}${i.count > 1 ? ' ×' + i.count : ''}</span>`
+      ).join(' ') + '</div>';
+      html += '<div class="row-note">命中项可在「毒性 / 基因毒性结构警示」模块点击高亮对应 SMARTS 子结构。</div>';
     }
-    html += '<div class="row-note" style="margin-top:4px">注：PAINS/Brenk 为高频警示子集（非完整过滤库），仅作结构筛查参考。</div>';
+    html += '<div class="row-note" style="margin-top:4px">注：PAINS/Brenk/遗传毒性为扩充子集（非完整过滤库），仅作结构筛查参考。</div>';
     return html;
   }
   function bcsBadge(cls) {
@@ -1957,19 +2083,30 @@
   function renderADME(data) {
     const p = data.pred;
     const ruleHTML = [p.lipinski, p.veber, p.egan, p.muegge, p.ghose].map(ruleBlock).join('');
-
+    const unc = p.uncertainty || {};
     const bio = p.bioavailability, bbb = p.bbb, gi = p.gi, sa = p.sa, bcs = p.bcs;
+    const confBBB = unc.bbb ? `${unc.bbb.emoji} ${unc.bbb.level}` : '';
+    const confBCS = unc.bcs ? `${unc.bcs.emoji} ${unc.bcs.level}` : '';
+    const confSA = unc.sa ? `${unc.sa.emoji} ${unc.sa.level}` : '';
     const scoreHTML = `
       <div style="margin-top:6px;font-weight:700;font-size:13.5px;margin-bottom:8px" data-i18n="admeSummary">综合 ADME 估计</div>
       <div class="score-line">
         <div class="score-box"><div class="s-label" data-i18n="admeBio">生物利用度评分</div><div class="s-val">${bio.score.toFixed(2)}</div><div style="font-size:11.5px;color:#5b6776">${bio.label}</div></div>
-        <div class="score-box"><div class="s-label" data-i18n="admeBBB">血脑屏障透过</div><div class="s-val">${bbb.level.split(' ')[0]}</div><div style="font-size:11.5px;color:#5b6776">logBB ≈ ${bbb.logBB}</div></div>
+        <div class="score-box"><div class="s-label" data-i18n="admeBBB">血脑屏障透过</div><div class="s-val">${bbb.level.split(' ')[0]}</div><div style="font-size:11.5px;color:#5b6776">logBB ≈ ${bbb.logBB} ${confBBB}</div></div>
         <div class="score-box"><div class="s-label" data-i18n="admeGI">胃肠道吸收</div><div class="s-val">${gi.level}</div><div style="font-size:11.5px;color:#5b6776">SwissADME 估计</div></div>
-        <div class="score-box"><div class="s-label" data-i18n="admeSA">合成可及性</div><div class="s-val">${sa.level}</div><div style="font-size:11.5px;color:#5b6776">SA≈${sa.score}${sa.approximate ? ' (近似)' : ''}</div></div>
+        <div class="score-box"><div class="s-label" data-i18n="admeSA">合成可及性</div><div class="s-val">${sa.level}</div><div style="font-size:11.5px;color:#5b6776">SA≈${sa.score}${sa.method ? ' · ' + sa.method : (sa.approximate ? ' (近似)' : '')} ${confSA}</div></div>
       </div>
-      <div class="bcs-line"><span data-i18n="bcsTitle">BCS 分类预估：</span><span class="badge badge-${bcsBadge(bcs.class)}">第 ${bcs.class} 类</span> （${bcs.desc}）— 溶解度${bcs.solubilityHigh ? T('bcsSolHi') : T('bcsSolLo')} / 渗透性${bcs.permeabilityHigh ? T('bcsPermHi') : T('bcsPermLo')}</div>`;
+      <div class="bcs-line"><span data-i18n="bcsTitle">BCS 分类预估：</span><span class="badge badge-${bcsBadge(bcs.class)}">第 ${bcs.class} 类</span> （${bcs.desc}）— 溶解度${bcs.solubilityHigh ? T('bcsSolHi') : T('bcsSolLo')} / 渗透性${bcs.permeabilityHigh ? T('bcsPermHi') : T('bcsPermLo')} ${confBCS}</div>`;
+    if (sa && sa.note) {
+      /* appended below */
+    }
+    const saNote = (sa && sa.note) ? `<div class="row-note">${escapeHtml(sa.note)}</div>` : '';
+    if (p.logP && p.logP.consensus != null) {
+      /* rules already use consensus via Acc11 */
+    }
+    const logPNote = (p.logP) ? `<div class="row-note">类药规则所用 logP：共识 ${p.logP.consensus != null ? p.logP.consensus : '—'}（${escapeHtml(p.logP.method || '')}）。</div>` : '';
 
-    els.admePanel.innerHTML = ruleHTML + drugFriendliness(data) + scoreHTML;
+    els.admePanel.innerHTML = logPNote + ruleHTML + drugFriendliness(data) + scoreHTML + saNote;
   }
 
   /* ---------- 渲染：雷达图 ---------- */

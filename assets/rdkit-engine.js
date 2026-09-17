@@ -173,6 +173,18 @@ window.RDKitEngine = (function () {
     { key: 'guanidine', name: '胍基', type: 'base', pka: 13.6, smarts: 'N[C](=N)N', aromatic: false },
     { key: 'amidine', name: '脒基', type: 'base', pka: 12.4, smarts: '[#6]C(=N)N', aromatic: false },
     { key: 'hydrazine', name: '肼 (-NHNH2)', type: 'base', pka: 8.0, smarts: 'N[N;!$(NC=O)]', aromatic: false },
+    // —— ACC11 扩充：常见酸碱 ——
+    { key: 'tetrazole', name: '四唑 (酸性)', type: 'acid', pka: 4.9, smarts: 'c1nnn[nH]1', aromatic: true },
+    { key: 'barbituric_nh', name: '巴比妥/酰脲 N-H', type: 'acid', pka: 7.5, smarts: 'O=C1NC(=O)NC(=O)1', aromatic: false },
+    { key: 'sulfonylurea', name: '磺酰脲 N-H', type: 'acid', pka: 5.5, smarts: 'S(=O)(=O)NC(=O)N', aromatic: false },
+    { key: 'phosphonic', name: '膦酸 (-PO3H2)', type: 'acid', pka: 2.2, smarts: 'P(=O)(O)O', aromatic: false },
+    { key: 'vinylogous_acid', name: '乙烯醇酸式 (1,3-二羰基)', type: 'acid', pka: 9.0, smarts: 'O=C([#6])C(=O)[#6]', aromatic: false },
+    { key: 'oxime_oh', name: '肟 O-H', type: 'acid', pka: 11.0, smarts: 'C=N[OH]', aromatic: false },
+    { key: 'piperazine', name: '哌嗪 N（脂肪）', type: 'base', pka: 9.8, smarts: 'N1CCNCC1', aromatic: false },
+    { key: 'morpholine', name: '吗啉 N', type: 'base', pka: 8.4, smarts: 'O1CCNCC1', aromatic: false },
+    { key: 'imidazole_extra', name: '咪唑（单环）', type: 'base', pka: 7.0, smarts: 'n1cc[nH]c1', aromatic: true },
+    { key: 'quinoline_n', name: '喹啉/异喹啉 N', type: 'base', pka: 4.9, smarts: 'n1cccc2ccccc12', aromatic: true },
+    { key: 'amidine_aryl', name: '芳基脒', type: 'base', pka: 11.5, smarts: 'cC(=N)N', aromatic: true },
   ];
   const ION_MAP = {};
   IONIZABLE.forEach(g => { ION_MAP[g.key] = g; });
@@ -235,12 +247,28 @@ window.RDKitEngine = (function () {
     { key: 'thiol', name: '巯基 (-SH)', smarts: '[SH]' },
     { key: 'quinone', name: '醌式结构', smarts: 'O=C1C=CC(=O)C=C1' },
     { key: 'hydroxamic', name: '异羟肟酸', smarts: 'C(=O)N[OH]' },
+    // ACC11 扩充 PAINS 子集
+    { key: 'catechol', name: '邻苯二酚', smarts: 'c1ccc(O)c(O)c1' },
+    { key: 'rhodanine', name: '罗丹宁', smarts: 'O=C1CSC(=S)N1' },
+    { key: 'ene_rhodanine', name: '烯基罗丹宁', smarts: 'O=C1CSC(=S)N1C=C' },
+    { key: 'aminophenol', name: '氨基酚', smarts: 'c1ccc(O)c(N)c1' },
+    { key: 'acylhydrazone', name: '酰腙', smarts: 'C(=O)N/N=C/' },
+    { key: 'mannich_base', name: 'Mannich 碱可疑', smarts: '[#6]=C([#6])N([#6])[#6]' },
+    { key: 'alkylidene_barbiturate', name: '亚烷基巴比妥', smarts: 'O=C1NC(=O)NC(=O)C1=C' },
   ];
   const BRENK = [
     { key: 'cyclopropane', name: '环丙烷（小环张力）', smarts: 'C1CC1' },
     { key: 'phosphonate', name: '膦酸/磷酸酯', smarts: 'P(=O)(O)(O)' },
     { key: 'enamine', name: '烯胺', smarts: 'C=C[N]' },
     { key: 'hemiacetal', name: '半缩醛/缩醛', smarts: 'O[C;H1,H2][O]' },
+    // ACC11 扩充 Brenk 子集
+    { key: 'acyl_halide', name: '酰卤', smarts: 'C(=O)[F,Cl,Br,I]' },
+    { key: 'sulfonyl_halide', name: '磺酰卤', smarts: 'S(=O)(=O)[F,Cl,Br,I]' },
+    { key: 'isocyanate_b', name: '异氰酸酯', smarts: 'N=C=O' },
+    { key: 'thiocarbonyl', name: '硫羰基', smarts: 'C(=S)[#6,#7,#8]' },
+    { key: 'nitroso', name: '亚硝基', smarts: '[NX2]=O' },
+    { key: 'peroxide_b', name: '过氧化物', smarts: 'OO' },
+    { key: 'three_membered_het', name: '三元杂环（氮丙啶等）', smarts: 'N1CC1' },
   ];
 
   function detectSMARTS(mol, list) {
@@ -313,6 +341,17 @@ window.RDKitEngine = (function () {
       note: '噻吩可经 CYP 代谢，潜在肝毒性/反应代谢物警示。' },
     { key: 'imidazole', name: '咪唑环', smarts: 'c1c[nH]cn1', cats: ['cyp'], severity: 'low',
       note: '咪唑为常见 CYP 抑制/代谢位点（如抗真菌唑类）。' },
+    // —— ACC11 遗传毒性警示扩充 ——
+    { key: 'propiolactone', name: 'β-丙内酯类', smarts: 'O=C1CCO1', cats: ['genotoxic'], severity: 'high',
+      note: '内酯烷化剂，潜在基因毒性。' },
+    { key: 'mustard', name: '氮芥/硫芥样', smarts: '[N,S](CCCl)CCCl', cats: ['genotoxic'], severity: 'high',
+      note: '双氯乙基烷化剂骨架，高基因毒性关注。' },
+    { key: 'aldehyde_alpha_beta', name: 'α,β-不饱和醛', smarts: 'C=CC=O', cats: ['genotoxic', 'sensitization'], severity: 'medium',
+      note: '亲电不饱和醛，潜在致敏/反应活性。' },
+    { key: 'aryl_hydrazine', name: '芳基肼', smarts: 'cNN', cats: ['genotoxic'], severity: 'high',
+      note: '芳基肼类基因毒性警示。' },
+    { key: 'haloalkene', name: '卤代烯烃', smarts: 'C=C[Cl,Br,I]', cats: ['genotoxic'], severity: 'medium',
+      note: '卤代烯烃潜在反应代谢/基因毒性警示。' },
   ];
   // 由 molblock 推导涉及高亮原子的键索引（用于子结构高亮渲染）
   function highlightBonds(mol, atomSet) {
@@ -812,7 +851,13 @@ window.RDKitEngine = (function () {
     const brenk = detectSMARTS(mol, BRENK);
     try { if (typeof mol.delete === 'function') mol.delete(); } catch (e) {}
 
-    return { desc, svg, inchi, inchikey, formula, groups, acidbase, pka, pains, brenk, smiles };
+    // ACC11：尽量暴露 get_descriptors 中的稳定字段清单（不替换 wasm）
+    const descKeys = desc && typeof desc === 'object' ? Object.keys(desc).filter(k => desc[k] != null) : [];
+    return {
+      desc, svg, inchi, inchikey, formula, groups, acidbase, pka, pains, brenk, smiles,
+      descKeys, descKeyCount: descKeys.length,
+      wasmNote: 'RDKit minimal WASM（@rdkit/rdkit 2024.3.5 系）；描述符=get_descriptors()；无完整 MolStandardize/EmbedMolecule。',
+    };
   }
 
   // 毒性/基因毒性结构警示筛查：按 ALERTS 库做子结构匹配，分类汇总（去重）
@@ -832,8 +877,23 @@ window.RDKitEngine = (function () {
     return { parsed: true, all: found, byCat: cats, total: found.length, severe, summary };
   }
 
+  function probe3DMethods() {
+    if (!rdkit) return { embed: false, mmff: false, addHs: false, supported: false };
+    try {
+      const m = rdkit.get_mol('CCO');
+      if (!m) return { embed: false, mmff: false, addHs: false, supported: false };
+      const embed = typeof m.EmbedMolecule === 'function';
+      const mmff = typeof m.MMFFOptimizeMolecule === 'function';
+      const addHs = typeof m.AddHs === 'function';
+      try { if (typeof m.delete === 'function') m.delete(); } catch (_) {}
+      return { embed, mmff, addHs, supported: !!embed };
+    } catch (e) {
+      return { embed: false, mmff: false, addHs: false, supported: false };
+    }
+  }
+
   return {
-    init, compute, computeGeometry, compute3D, toxicityAlerts, highlightStructure, analyzeForm, countSMARTS,
+    init, compute, computeGeometry, compute3D, toxicityAlerts, highlightStructure, analyzeForm, countSMARTS, probe3DMethods,
     get version() { return rdkit ? (typeof rdkit.version === 'function' ? rdkit.version() : rdkit.version) : ''; },
     // 'local' = 离线 wasm；'cdn' = 联网兜底；'' = 尚未加载
     get source() { return rdkit ? (usedLocal ? 'local' : 'cdn') : ''; },

@@ -90,7 +90,7 @@ window.Predict = (function () {
     return { level };
   }
 
-  // 合成可及性（近似代理，非 Ertl 精确 SA 评分）
+  // 合成可及性（近似代理；ACC11 启用后由 Acc11.saScoreErtlLike 覆盖为更接近 Ertl 的实现）
   function syntheticAccessibility(d) {
     const rings = num(d.NumRings) || 0, aromatic = num(d.NumAromaticRings) || 0,
       stereo = num(d.NumAtomStereoCenters) || 0, csp3 = num(d.FractionCSP3),
@@ -162,7 +162,7 @@ window.Predict = (function () {
         mgml: molToMg(consensus, MW),
         cls: solClass(consensus),
       } : null,
-      note: 'ESOL 以 RDKit CrippenClogP 作为 logP 项（SwissADME 用 XLOGP3 替代），绝对值可能与 SwissADME 官网略有差异；Ali 为 model 3（logP + TPSA）。SILICOS-IT 为片段贡献法，需 FILTER-IT 片段库，纯前端无法复现（可在 swissadme.ch 查询）。',
+      note: '基线 ESOL/Ali 使用 CrippenClogP；启用 ACC11 后将改用共识 logP（Crippen+XLogP3）并并列轻量模型。与 SwissADME 可能仍有偏差。SILICOS-IT 需片段库，纯前端无法复现。',
     };
   }
 

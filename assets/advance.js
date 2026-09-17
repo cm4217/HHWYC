@@ -564,7 +564,7 @@ window.Advance = (function () {
   function set(id, html) { const el = document.getElementById(id); if (el) el.innerHTML = html; }
   function badge(level, text) { return `<span class="badge badge-${confBadge(level)}">${esc(text || level)}</span>`; }
 
-  function renderConfidence(a) {
+  function renderConfidence(a, data) {
     if (!a || !a.confidence) { set('advConfidence', ''); return; }
     const c = a.confidence;
     const rows = [
@@ -580,7 +580,17 @@ window.Advance = (function () {
       html += `<tr><td>${r[0]}</td><td>${badge(r[1].level)}</td><td>${(r[2] || []).map(esc).join('；') || '—'}</td></tr>`;
     });
     html += '</tbody></table>';
-    html += '<div class="row-note" style="margin-top:8px">可信度仅反映「模型适用性与交叉印证程度」，不代表预测值与实验值的绝对吻合；写报告/工艺决策时建议标注该等级。</div>';
+    html += '<div class="row-note" style="margin-top:8px">可信度仅反映「模型适用性与交叉印证程度」，不代表预测值与实验值的绝对吻合；写报告/工艺决策时建议标注该等级。ACC11 另在溶解度/ADME 卡片提供 logS·BBB·BCS·SA 置信灯与区间。</div>';
+    try {
+      const u = data && data.pred && data.pred.uncertainty;
+      if (u) {
+        html += '<div class="acc-unc-bar" style="margin-top:8px">ACC11 置信灯：';
+        ['logS','bbb','bcs','sa'].forEach(k => {
+          if (u[k]) html += `<span style="margin-right:10px">${u[k].emoji || ''} ${k}·${u[k].level}</span>`;
+        });
+        html += '</div>';
+      }
+    } catch (e) {}
     set('advConfidence', html);
   }
 
@@ -927,7 +937,7 @@ window.Advance = (function () {
   function renderAll(data) {
     if (!data || !data.advance) return;
     const a = data.advance;
-    renderConfidence(a);
+    renderConfidence(a, data);
     renderEsol(a);
     renderICHM7(a);
     renderSalt(a);
